@@ -12,15 +12,15 @@ if __name__ == '__main__':
             "use_simotm" set to "Gray". channels=1,
     '''
 
-    model = YOLO(R"PVELAD/PVELAD-yolov8n/weights/best.pt") # select your model.pt path
-    model.predict(source=r'G:\wan\data\PVELAD\good_corner_png2',
+    model = YOLO(R"data/LLVIP_IF-yolo11x-e300-16-pretrained.pt") # select your model.pt path
+    model.predict(source=r'data\dataset\infrared',
                   imgsz=640,
                   project='runs/detect',
                   name='exp',
                   show=False,
                   save_frames=True,
-                  use_simotm="Gray", # Gray: uint8  Gray16bit: uint16
-                  channels=1,
+                  use_simotm="RGB", # Gray: uint8  Gray16bit: uint16
+                  channels=3,
                   save=True,
                   # conf=0.2,
                   # visualize=True # visualize model features maps

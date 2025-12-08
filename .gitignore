@@ -180,3 +180,6 @@ calibration_*.npy
 #/train_RGBT_kaist.py
 /ultralytics/cfg/datasets/dota8_MINE.yaml
 /val2.py
+
+/CLAUDE.md
+/data
