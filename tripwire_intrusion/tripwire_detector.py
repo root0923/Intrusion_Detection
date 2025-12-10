@@ -7,10 +7,13 @@
 import sys
 import cv2
 import argparse
+import requests
+import base64
 from pathlib import Path
+from datetime import datetime
 import time
 from collections import deque
-from typing import Tuple
+from typing import Tuple, Any
 import torch
 
 # 添加项目根目录到路径
@@ -96,7 +99,11 @@ class TripwireDetectionSystem:
         print("\n" + "=" * 60)
         print("初始化绊线监控器...")
         print("=" * 60)
-        self.monitor = TripwireMonitor(args.config)
+        self.repeat_alarm_interval = float(getattr(args, 'repeat_alarm_interval', 30.0))
+        self.monitor = TripwireMonitor(
+            args.config,
+            global_cooldown=self.repeat_alarm_interval  # 传入全局冷却时间
+        )
 
         # 3. 初始化可视化器
         self.visualizer = TripwireVisualizer(
@@ -119,6 +126,25 @@ class TripwireDetectionSystem:
         self.frame_count = 0
         self.total_events = 0
         self.fps_list = []
+        # 报警/上传配置
+        self.alarm_url = getattr(args, 'alarm_url', None)
+        self.save_width = int(getattr(args, 'save_width', 0)) if getattr(args, 'save_width', None) else None
+        self.save_height = int(getattr(args, 'save_height', 0)) if getattr(args, 'save_height', None) else None
+        # 每秒处理帧数（抽帧策略）
+        self.process_fps = float(getattr(args, 'process_fps', 2.0))
+        # 重复报警间隔（秒），由 TripwireMonitor 内部管理
+        self.repeat_alarm_interval = float(getattr(args, 'repeat_alarm_interval', 30.0))
+
+        # 缓存上一次可视化帧（用于抽帧时显示）
+        self._last_vis_frame = None
+        # 报警图片本地保存目录（输出目录下的 alarms 子目录）
+        try:
+            output_dir = Path(getattr(args, 'output_dir', 'runs/tripwire'))
+        except Exception:
+            output_dir = Path('runs/tripwire')
+        self.alarm_dir = output_dir / 'alarms'
+        self.alarm_dir.mkdir(parents=True, exist_ok=True)
+        print(f"报警图片目录: {self.alarm_dir}")
 
     def _update_tracks(self, results):
         """
@@ -198,6 +224,65 @@ class TripwireDetectionSystem:
         if tracks_to_remove:
             print(f"[内存管理] 清理了 {len(tracks_to_remove)} 个旧track，当前活跃: {len(self.track_history)}")
 
+    def resize_and_encode_image(self, image: Any) -> Tuple[Any, str]:
+        """
+        将图片缩放到 self.save_width x self.save_height（如果设置），并返回 (resized_image, base64_str)
+        """
+        img = image
+        if self.save_width and self.save_height:
+            try:
+                resized = cv2.resize(img, (int(self.save_width), int(self.save_height)), interpolation=cv2.INTER_AREA)
+            except Exception:
+                resized = img
+        else:
+            resized = img
+
+        success, buffer = cv2.imencode('.jpg', resized)
+        if not success:
+            success, buffer = cv2.imencode('.jpg', img)
+
+        img_b64 = base64.b64encode(buffer).decode('utf-8')
+        return resized, img_b64
+
+    def _maybe_send_alarm(self, event, vis_frame):
+        """
+        发送报警到配置的 URL
+        冷却逻辑已由 TripwireMonitor 内部管理，这里直接发送
+        """
+        now = time.time()
+
+        # 生成图片 base64（并获取缩放后的图片对象）
+        resized_img, img_b64 = self.resize_and_encode_image(vis_frame)
+
+        # 保存报警图片到本地文件（使用毫秒时间戳和绊线ID）
+        try:
+            ts_ms = int(now * 1000)
+            alarm_filename = self.alarm_dir / f"alarm_{ts_ms}_{event.tripwire_id}.jpg"
+            cv2.imwrite(str(alarm_filename), resized_img)
+            print(f"✓ 报警图片已保存: {alarm_filename}")
+        except Exception as e:
+            print(f"✗ 保存报警图片失败: {e}")
+
+        # 上传的报警信息仅包含时间和图片 base64 编码
+        alarm_payload = {
+            'timestamp': now,
+            'time_str': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
+            'image': img_b64
+        }
+
+        if not self.alarm_url:
+            print("✗ 未配置报警URL，跳过发送报警")
+            return
+
+        try:
+            resp = requests.post(self.alarm_url, json=alarm_payload, timeout=5)
+            if resp.status_code == 200:
+                print(f"✓ 报警已发送: track={event.track_id}, tripwire={event.tripwire_id}")
+            else:
+                print(f"✗ 报警发送失败: HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"✗ 报警发送异常: {e}")
+
     def process_frame(self, frame):
         """
         处理单帧
@@ -251,7 +336,8 @@ class TripwireDetectionSystem:
         cv2.putText(vis_frame, f"FPS: {fps:.1f}", (vis_frame.shape[1] - 150, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        return vis_frame, len(events)
+        # 返回事件对象列表以便外层发送报警
+        return vis_frame, events
 
     def run_video(self, video_path):
         """
@@ -291,13 +377,42 @@ class TripwireDetectionSystem:
 
         print("\n开始处理... (按 'q' 退出)\n")
 
+        # 计算抽帧间隔
+        if fps and self.process_fps and self.process_fps > 0:
+            process_interval = max(1, int(round(float(fps) / float(self.process_fps))))
+        else:
+            process_interval = 1
+
+        print(f"抽帧设置: 每 {process_interval} 帧处理一次 (目标处理 {self.process_fps} 帧/s)")
+
+        input_frame_idx = 0
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # 处理帧
-            vis_frame, num_events = self.process_frame(frame)
+            input_frame_idx += 1
+
+            # 决定是否在本帧运行检测（抽帧）
+            process_this_frame = ((input_frame_idx - 1) % process_interval) == 0
+
+            if process_this_frame:
+                # 处理帧（包含检测、跟踪、可视化）
+                vis_frame, events = self.process_frame(frame)
+                # 缓存最新可视化帧
+                self._last_vis_frame = vis_frame
+
+                # 对每个事件尝试发送报警
+                if events and len(events) > 0:
+                    for ev in events:
+                        self._maybe_send_alarm(ev, vis_frame)
+            else:
+                # 非处理帧：使用上一次可视化帧或简单绘制绊线以减少开销
+                if self._last_vis_frame is not None:
+                    vis_frame = self._last_vis_frame
+                else:
+                    vis_frame = self.visualizer.draw_tripwire_setup(frame)
 
             # 显示
             if self.args.show:
@@ -309,11 +424,11 @@ class TripwireDetectionSystem:
             if out is not None:
                 out.write(vis_frame)
 
-            # 进度
-            if self.frame_count % 30 == 0:
-                progress = self.frame_count / total_frames * 100
-                avg_fps = sum(self.fps_list[-30:]) / min(30, len(self.fps_list))
-                print(f"进度: {self.frame_count}/{total_frames} ({progress:.1f}%), "
+            # 进度（按输入帧数汇报）
+            if input_frame_idx % 30 == 0:
+                progress = input_frame_idx / total_frames * 100 if total_frames else 0
+                avg_fps = sum(self.fps_list[-30:]) / min(30, len(self.fps_list)) if self.fps_list else 0
+                print(f"进度: {input_frame_idx}/{total_frames} ({progress:.1f}%), "
                       f"FPS: {avg_fps:.1f}, 总事件: {self.total_events}")
 
         cap.release()
@@ -387,6 +502,18 @@ def parse_args():
                        help='绘制轨迹')
     parser.add_argument('--trajectory-length', type=int, default=30,
                        help='轨迹显示长度')
+
+    # 报警与保存参数
+    parser.add_argument('--alarm-url', type=str, default=None,
+                       help='报警接口URL (POST JSON)')
+    parser.add_argument('--save-width', type=int, default=1280,
+                       help='报警图片保存/上传宽度')
+    parser.add_argument('--save-height', type=int, default=720,
+                       help='报警图片保存/上传高度')
+    parser.add_argument('--process-fps', type=float, default=5.0,
+                       help='每秒处理帧数（抽帧），例如2表示每秒处理2帧）')
+    parser.add_argument('--repeat-alarm-interval', type=float, default=30.0,
+                       help='重复报警最小间隔（秒）')
 
     return parser.parse_args()
 

@@ -116,7 +116,9 @@ class AlarmManager:
                  conf_threshold: float = 0.25,
                  first_alarm_duration: float = 1.0,
                  repeat_alarm_interval: float = 30.0,
-                 alarm_url: Optional[str] = None):
+                 alarm_url: Optional[str] = None,
+                 save_height: Optional[int] = None,
+                 save_width: Optional[int] = None):
         """
         Args:
             conf_threshold: 置信度阈值
@@ -128,6 +130,9 @@ class AlarmManager:
         self.first_alarm_duration = first_alarm_duration
         self.repeat_alarm_interval = repeat_alarm_interval
         self.alarm_url = alarm_url
+        # 保存/编码报警图片的目标尺寸
+        self.save_height = save_height
+        self.save_width = save_width
 
         # 入侵状态
         self.intrusion_state = {
@@ -137,20 +142,19 @@ class AlarmManager:
 
         print(f"✓ 报警管理器初始化:")
         print(f"  - 置信度阈值: {conf_threshold}")
-        print(f"  - 首次报警时间: {first_alarm_duration}s (消抖)")
+        print(f"  - 首次报警时间: {first_alarm_duration}s")
         print(f"  - 重复报警间隔: {repeat_alarm_interval}s")
         if alarm_url:
             print(f"  - 报警接口: {alarm_url}")
 
     def update_intrusion(self, detections: List[Dict],
-                        frame: np.ndarray, frame_count: int) -> List[Dict]:
+                        frame: np.ndarray) -> List[Dict]:
         """
         更新入侵状态并触发报警
 
         Args:
             detections: 检测结果列表
             frame: 当前帧图像（用于截图）
-            frame_count: 帧编号
 
         Returns:
             List[Dict]: 触发的报警列表
@@ -178,7 +182,7 @@ class AlarmManager:
                         current_time - self.intrusion_state['last_alarm_time'] >= self.repeat_alarm_interval):
 
                         # 触发报警
-                        alarm = self._create_alarm(valid_detections, frame, frame_count)
+                        alarm = self._create_alarm()
                         alarms.append(alarm)
 
                         # 更新最后报警时间
@@ -195,15 +199,13 @@ class AlarmManager:
 
         return alarms
 
-    def _create_alarm(self, detections: List[Dict],
-                     frame: np.ndarray, frame_count: int) -> Dict:
+    def _create_alarm(self) -> Dict:
         """
         创建报警信息（只包含时间戳，图片将在可视化后添加）
 
         Args:
             detections: 检测结果
             frame: 当前帧
-            frame_count: 帧编号
 
         Returns:
             Dict: 报警信息 {'timestamp': str, 'image': str (稍后添加)}
@@ -234,6 +236,29 @@ class AlarmManager:
         except Exception as e:
             print(f"  ✗ 报警发送异常: {e}")
 
+    def resize_and_encode(self, image: np.ndarray) -> Tuple[np.ndarray, str]:
+        """
+        将图片缩放到 `save_width` x `save_height` 并返回 (resized_image, base64_str)
+
+        如果 `save_height` 或 `save_width` 为 None 或与原图相同，则不缩放。
+        """
+        img = image
+
+        if not self.save_height or not self.save_width:
+            resized = img
+        else:
+            try:
+                resized = cv2.resize(img, (int(self.save_width), int(self.save_height)), interpolation=cv2.INTER_AREA)
+            except Exception:
+                resized = img
+
+        success, buffer = cv2.imencode('.jpg', resized)
+        if not success:
+            success, buffer = cv2.imencode('.jpg', img)
+
+        image_base64 = base64.b64encode(buffer).decode('utf-8')
+        return resized, image_base64
+
 
 class IntrusionDetectionSystem:
     """区域入侵检测系统"""
@@ -244,6 +269,10 @@ class IntrusionDetectionSystem:
                  conf_threshold: float = 0.5,
                  first_alarm_duration: float = 2.0,
                  repeat_alarm_interval: float = 30.0,
+                 save_height: int = 480,
+                 save_width: int = 640,
+                 target_size: int = 640,
+                 process_fps: float = 2.0,
                  alarm_url: Optional[str] = None):
         """
         Args:
@@ -252,6 +281,10 @@ class IntrusionDetectionSystem:
             conf_threshold: 置信度阈值
             first_alarm_duration: 首次报警时间（秒）
             repeat_alarm_interval: 重复报警间隔（秒）
+            save_height: 保存报警的图片高度
+            save_width: 保存报警的图片宽度
+            target_size: YOLO检测输入/目标尺寸
+            process_fps: 每秒处理帧数（抽帧）
             alarm_url: 报警接口URL
         """
         self.detector = detector
@@ -260,13 +293,15 @@ class IntrusionDetectionSystem:
             conf_threshold=conf_threshold,
             first_alarm_duration=first_alarm_duration,
             repeat_alarm_interval=repeat_alarm_interval,
+            save_height=save_height,
+            save_width=save_width,
             alarm_url=alarm_url
         )
 
-        self.class_names = {0: 'person'}
+        self.target_size = int(target_size)
+        self.process_fps = float(process_fps) if process_fps and float(process_fps) > 0 else 2.0
 
-        # 统计信息
-        self.frame_count = 0
+        self.class_names = {0: 'person'}
         self.total_alarms = 0 
 
     def process_video(self,
@@ -372,12 +407,18 @@ class IntrusionDetectionSystem:
             alarm_dir.mkdir(parents=True, exist_ok=True)
             print(f"报警截图目录: {alarm_dir}")
 
-        print(f"\n按 'q' 退出, 按 's' 截图\n")
-
         # 处理视频帧
         frame_count = 0
         start_time = time.time()
         total_alarms = 0
+
+        # 计算抽帧间隔：根据视频实际 fps 与希望处理的每秒帧数 self.process_fps
+        if fps and self.process_fps and self.process_fps > 0:
+            process_interval = max(1, int(round(float(fps) / float(self.process_fps))))
+        else:
+            process_interval = 1
+
+        print(f"抽帧设置: 每 {process_interval} 帧处理一次 (目标处理 {self.process_fps} 帧/s)")
 
         while True:
             ret, frame = cap.read()
@@ -386,41 +427,46 @@ class IntrusionDetectionSystem:
 
             frame_count += 1
 
-            # 应用ROI mask（将所有ROI外区域变黑）
-            masked_frame = self.roi_manager.apply_mask(frame)
+            # 决定当前帧是否为处理帧（抽帧）
+            process_this_frame = ((frame_count - 1) % process_interval) == 0
 
-            # 在masked frame上进行YOLO检测（只检测一次）
-            detections = self.detector.detect(
-                masked_frame,
-                conf_thresh=0.25,  # 检测阈值可以低一些，报警阈值由AlarmManager控制
-                iou_thresh=0.7,
-                target_size=640
-            )
+            alarms = []
+            resized_alarm_img = None
+            alarm_image_base64 = None
 
-            # 更新入侵状态并触发报警
-            alarms = self.alarm_manager.update_intrusion(
-                detections, frame, frame_count
-            )
-            total_alarms += len(alarms)
+            if process_this_frame:
+                # 应用ROI mask（将所有ROI外区域变黑）
+                masked_frame = self.roi_manager.apply_mask(frame)
 
-            # 可视化
-            vis_frame = self._visualize(frame, detections, alarms)
+                # 在masked frame上进行YOLO检测
+                detections = self.detector.detect(
+                    masked_frame,
+                    conf_thresh=0.25,
+                    iou_thresh=0.7,
+                    target_size=self.target_size
+                )
 
-            # 为报警添加可视化图片（Base64编码）
-            if alarms:
-                _, buffer = cv2.imencode('.jpg', vis_frame)
-                image_base64 = base64.b64encode(buffer).decode('utf-8')
-                for alarm in alarms:
-                    alarm['image'] = image_base64
+                # 更新入侵状态并触发报警
+                alarms = self.alarm_manager.update_intrusion(detections, frame)
+                total_alarms += len(alarms)
 
-                    # 发送报警到接口
-                    if self.alarm_manager.alarm_url:
-                        self.alarm_manager._send_alarm(alarm)
+                # 可视化包含检测框与报警信息
+                vis_frame = self._visualize(frame, detections, alarms)
 
-            # 保存报警截图
-            if save_alarms and alarm_dir and alarms:
-                alarm_file = alarm_dir / f"alarm_frame{frame_count}.jpg"
-                cv2.imwrite(str(alarm_file), vis_frame)
+                # 为报警添加可视化图片（先缩放到指定大小，再Base64编码）
+                if alarms:
+                    # 使用 AlarmManager 提供的缩放与编码方法
+                    resized_alarm_img, alarm_image_base64 = self.alarm_manager.resize_and_encode(vis_frame)
+
+                    for alarm in alarms:
+                        alarm['image'] = alarm_image_base64
+
+                        # 发送报警到接口
+                        if self.alarm_manager.alarm_url:
+                            self.alarm_manager._send_alarm(alarm)
+            else:
+                # 非处理帧：仅绘制 ROI（轻量），不运行检测/报警逻辑
+                vis_frame = self.roi_manager.draw_rois(frame.copy(), color=(0, 255, 0), thickness=2)
 
             # 写入输出视频
             if writer:
@@ -555,7 +601,7 @@ def parse_args():
 
     # ROI配置
     parser.add_argument('--config', type=str,
-                       default='regional_intrusion/roi_config.json',
+                       default='area_intrusion/roi_config.json',
                        help='ROI配置文件')
 
     # 输入输出
@@ -579,6 +625,14 @@ def parse_args():
                        help='首次报警时间（秒）- 消抖')
     parser.add_argument('--repeat-alarm-interval', type=float, default=30.0,
                        help='重复报警间隔（秒）')
+    parser.add_argument('--save-width', type=int, default=1280,
+                       help='保存的报警图片宽度')
+    parser.add_argument('--save-height', type=int, default=720,
+                       help='保存的报警图片高度')
+    parser.add_argument('--target-size', type=int, default=640,
+                       help='YOLO 检测输入/目标尺寸 (target_size)')
+    parser.add_argument('--process-fps', type=float, default=10.0,
+                       help='每秒处理帧数（抽帧），例如 2 表示每秒抽取2帧进行检测）')
     parser.add_argument('--alarm-url', type=str, default=None,
                        help='报警接口URL')
 
@@ -605,6 +659,10 @@ def main():
         conf_threshold=args.conf_threshold,
         first_alarm_duration=args.first_alarm_duration,
         repeat_alarm_interval=args.repeat_alarm_interval,
+        save_height=args.save_height,
+        save_width=args.save_width,
+        target_size=args.target_size,
+        process_fps=args.process_fps,
         alarm_url=args.alarm_url
     )
 

@@ -59,12 +59,12 @@ class TripwireVisualizer:
         # 3. 绘制检测框和ID
         self._draw_tracks(vis_frame, tracks, class_names)
 
-        # 4. 绘制最近事件
-        if recent_events:
-            self._draw_recent_events(vis_frame, recent_events)
+        # # 4. 绘制最近事件
+        # if recent_events:
+        #     self._draw_recent_events(vis_frame, recent_events)
 
-        # 5. 绘制信息面板
-        self._draw_info_panel(vis_frame, len(tracks), len(recent_events) if recent_events else 0)
+        # # 5. 绘制信息面板
+        # self._draw_info_panel(vis_frame, len(tracks), len(recent_events) if recent_events else 0)
 
         return vis_frame
 
@@ -86,19 +86,19 @@ class TripwireVisualizer:
             if tripwire.enabled and tripwire.direction != 'bidirectional':
                 self._draw_direction_arrow(frame, tripwire, color)
 
-            # 绘制标签
-            mid_x = int((tripwire.p1[0] + tripwire.p2[0]) / 2)
-            mid_y = int((tripwire.p1[1] + tripwire.p2[1]) / 2)
-            label = f"{tripwire.id}"
+            # # 绘制标签
+            # mid_x = int((tripwire.p1[0] + tripwire.p2[0]) / 2)
+            # mid_y = int((tripwire.p1[1] + tripwire.p2[1]) / 2)
+            # label = f"{tripwire.id}"
 
-            # 标签背景
-            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (mid_x - label_w // 2 - 5, mid_y - label_h - 10),
-                         (mid_x + label_w // 2 + 5, mid_y), color, -1)
+            # # 标签背景
+            # (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            # cv2.rectangle(frame, (mid_x - label_w // 2 - 5, mid_y - label_h - 10),
+            #              (mid_x + label_w // 2 + 5, mid_y), color, -1)
 
-            # 标签文字
-            cv2.putText(frame, label, (mid_x - label_w // 2, mid_y - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            # # 标签文字
+            # cv2.putText(frame, label, (mid_x - label_w // 2, mid_y - 5),
+            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
     def _draw_direction_arrow(self, frame: np.ndarray, tripwire: Tripwire, color: Tuple):
         """绘制方向箭头"""
@@ -164,15 +164,15 @@ class TripwireVisualizer:
         """绘制最近的穿越事件"""
         for event in events:
             pos = tuple(map(int, event.position))
-
-            # 绘制警告圆圈
-            cv2.circle(frame, pos, 30, self.event_color, 3, cv2.LINE_AA)
-            cv2.circle(frame, pos, 35, self.event_color, 2, cv2.LINE_AA)
-
-            # 绘制警告文字
-            direction_text = "←" if event.direction == 'right_to_left' else "→"
-            cv2.putText(frame, f"ALERT! {direction_text}", (pos[0] - 40, pos[1] - 40),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, self.event_color, 2)
+            # 只在目标上方显示单词 ALERT（居中）
+            label = "ALERT"
+            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            text_x = int(pos[0] - label_w // 2)
+            text_y = int(pos[1] - 40)
+            # 确保文字不越界
+            text_x = max(5, min(text_x, frame.shape[1] - label_w - 5))
+            text_y = max(label_h + 5, text_y)
+            cv2.putText(frame, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, self.event_color, 2)
 
     def _draw_info_panel(self, frame: np.ndarray, num_tracks: int, num_events: int):
         """绘制信息面板"""

@@ -90,16 +90,16 @@ class CrossingEvent:
 class TripwireMonitor:
     """绊线监控器"""
 
-    def __init__(self, config_path: str, max_track_history_age: float = 30.0, image_height: Optional[int] = None):
+    def __init__(self, config_path: str, max_track_history_age: float = 30.0, image_height: Optional[int] = None, global_cooldown: Optional[float] = None):
         """
         Args:
             config_path: 配置文件路径 (JSON)
             max_track_history_age: 保留track历史记录的最大时间（秒），默认30秒
             image_height: 图像高度，用于坐标系转换（可选）
+            global_cooldown: 全局冷却时间（秒），如果提供则覆盖配置文件中的alert_cooldown
         """
         self.config_path = Path(config_path)
         self.tripwires: List[Tripwire] = []
-        self.track_history: Dict[int, Dict] = {}  # {track_id: {tripwire_id: last_cross_time}}
         self.track_last_active: Dict[int, float] = {}  # {track_id: last_active_timestamp}
         self.events: List[CrossingEvent] = []
 
@@ -108,6 +108,10 @@ class TripwireMonitor:
 
         # 图像高度（用于坐标系转换）
         self.image_height = image_height
+
+        # 全局冷却时间（通道级别）
+        self._global_cooldown = global_cooldown  # 如果设置，则覆盖配置文件中的值
+        self._global_last_alarm_time = None
 
         # 加载配置
         self._load_config()
@@ -143,16 +147,30 @@ class TripwireMonitor:
 
     def update(self, tracks: List[Any]) -> List[CrossingEvent]:
         """
-        更新监控状态，检测穿越事件
+        更新监控状态，检测穿越事件（使用全局冷却机制）
 
         Args:
             tracks: 活跃轨迹列表（Track对象，需要有trajectory和track_id属性）
 
         Returns:
-            List[CrossingEvent]: 本帧触发的穿越事件
+            List[CrossingEvent]: 本帧触发的穿越事件（最多1个，全局冷却）
         """
         current_events = []
         current_time = time.time()
+
+        # 获取冷却时间（优先使用 global_cooldown，否则使用配置中的第一条绊线的冷却时间）
+        if self._global_cooldown is not None:
+            cooldown = self._global_cooldown
+        elif self.tripwires:
+            cooldown = self.tripwires[0].alert_cooldown
+        else:
+            cooldown = 2.0
+
+        # 检查全局冷却时间
+        if self._global_last_alarm_time is not None:
+            if (current_time - self._global_last_alarm_time) < cooldown:
+                # 仍在冷却期，不检测任何绊线
+                return current_events
 
         for track in tracks:
             # 更新track最后活跃时间
@@ -169,28 +187,19 @@ class TripwireMonitor:
 
             # 检查每条绊线
             for tripwire in self.tripwires:
-                if not tripwire.enabled:
-                    continue
-
                 # 检查轨迹段是否与绊线相交
                 if check_line_intersection(tripwire.p1, tripwire.p2, track_prev, track_curr):
-                    print(tripwire.p1, tripwire.p2, track_prev, track_curr)
                     # 计算穿越方向（传入图像高度用于坐标系转换）
                     direction = compute_crossing_direction(
                         tripwire.p1, tripwire.p2, track_prev, track_curr,
                         image_height=self.image_height
                     )
-                    print(direction)
 
                     if direction is None:
                         continue
 
                     # 检查方向是否符合设定
                     if not tripwire.is_direction_allowed(direction):
-                        continue
-
-                    # 检查冷却时间
-                    if self._is_in_cooldown(track.track_id, tripwire.id, tripwire.alert_cooldown):
                         continue
 
                     # 创建穿越事件
@@ -205,43 +214,19 @@ class TripwireMonitor:
                     current_events.append(event)
                     self.events.append(event)
 
-                    # 更新历史记录
-                    self._update_track_history(track.track_id, tripwire.id)
+                    # 更新全局最后报警时间
+                    self._global_last_alarm_time = current_time
 
                     print(f"🚨 {event}")
+
+                    # 触发一次后立即返回（全局冷却）
+                    self._cleanup_old_track_history()
+                    return current_events
 
         # 清理过期的track历史记录
         self._cleanup_old_track_history()
 
         return current_events
-
-    def _is_in_cooldown(self, track_id: int, tripwire_id: str, cooldown: float) -> bool:
-        """
-        检查是否在冷却时间内
-
-        Args:
-            track_id: 目标ID
-            tripwire_id: 绊线ID
-            cooldown: 冷却时间（秒）
-
-        Returns:
-            bool: 是否在冷却期
-        """
-        if track_id not in self.track_history:
-            return False
-
-        if tripwire_id not in self.track_history[track_id]:
-            return False
-
-        last_time = self.track_history[track_id][tripwire_id]
-        return (time.time() - last_time) < cooldown
-
-    def _update_track_history(self, track_id: int, tripwire_id: str):
-        """更新轨迹历史"""
-        if track_id not in self.track_history:
-            self.track_history[track_id] = {}
-
-        self.track_history[track_id][tripwire_id] = time.time()
 
     def _cleanup_old_track_history(self):
         """清理过期的track历史记录，防止内存泄漏"""
@@ -255,8 +240,6 @@ class TripwireMonitor:
 
         # 删除过期track的历史记录
         for track_id in tracks_to_remove:
-            if track_id in self.track_history:
-                del self.track_history[track_id]
             if track_id in self.track_last_active:
                 del self.track_last_active[track_id]
 
@@ -290,6 +273,6 @@ class TripwireMonitor:
 
     def reset(self):
         """重置监控器"""
-        self.track_history = {}
         self.track_last_active = {}
         self.events = []
+        self._global_last_alarm_time = None
