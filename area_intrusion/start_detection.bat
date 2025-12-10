@@ -19,6 +19,7 @@ REM Detection Configuration
 set TARGET_SIZE=640
 set PROCESS_FPS=10.0
 set CONFIG_UPDATE_INTERVAL=30
+set TOLERANCE_TIME=3.0
 
 REM ==================== Start Detection System ====================
 
@@ -35,6 +36,7 @@ echo   Device: %DEVICE%
 echo   Target Size: %TARGET_SIZE%
 echo   Process FPS: %PROCESS_FPS%
 echo   Config Update Interval: %CONFIG_UPDATE_INTERVAL% seconds
+echo   Toleramce time: %TOLERANCE_TIME% seconds
 echo.
 echo Starting...
 echo ==========================================
@@ -50,6 +52,7 @@ python area_intrusion/intrusion_detector_api.py ^
     --target-size %TARGET_SIZE% ^
     --process-fps %PROCESS_FPS% ^
     --config-update-interval %CONFIG_UPDATE_INTERVAL%
+    --tolerance-time %TOLERANCE_TIME%
 
 REM ==================== Error Handling ====================
 

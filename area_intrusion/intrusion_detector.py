@@ -116,6 +116,7 @@ class AlarmManager:
                  conf_threshold: float = 0.25,
                  first_alarm_duration: float = 1.0,
                  repeat_alarm_interval: float = 30.0,
+                 tolerance_time: float = 3.0,
                  alarm_url: Optional[str] = None,
                  save_height: Optional[int] = None,
                  save_width: Optional[int] = None):
@@ -124,11 +125,13 @@ class AlarmManager:
             conf_threshold: 置信度阈值
             first_alarm_duration: 首次报警时间（秒），目标持续出现该时长才报警
             repeat_alarm_interval: 重复报警间隔（秒），该时间段内只报警一次
+            tolerance_time: 容忍时间（秒），检测不到目标后的宽限期，防止短暂丢失导致状态重置
             alarm_url: 报警接口URL
         """
         self.conf_threshold = conf_threshold
         self.first_alarm_duration = first_alarm_duration
         self.repeat_alarm_interval = repeat_alarm_interval
+        self.tolerance_time = tolerance_time
         self.alarm_url = alarm_url
         # 保存/编码报警图片的目标尺寸
         self.save_height = save_height
@@ -136,21 +139,23 @@ class AlarmManager:
 
         # 入侵状态
         self.intrusion_state = {
-            'first_time': None,
-            'last_alarm_time': None
+            'first_time': None,        # 首次检测到目标的时间
+            'last_alarm_time': None,   # 上次报警的时间
+            'last_seen_time': None     # 最后一次看到目标的时间（容忍机制关键）
         }
 
         print(f"✓ 报警管理器初始化:")
         print(f"  - 置信度阈值: {conf_threshold}")
         print(f"  - 首次报警时间: {first_alarm_duration}s")
         print(f"  - 重复报警间隔: {repeat_alarm_interval}s")
+        print(f"  - 容忍时间: {tolerance_time}s")
         if alarm_url:
             print(f"  - 报警接口: {alarm_url}")
 
     def update_intrusion(self, detections: List[Dict],
                         frame: np.ndarray) -> List[Dict]:
         """
-        更新入侵状态并触发报警
+        更新入侵状态并触发报警（带容忍机制）
 
         Args:
             detections: 检测结果列表
@@ -166,13 +171,17 @@ class AlarmManager:
         valid_detections = [det for det in detections if det['conf'] >= self.conf_threshold]
 
         if valid_detections:
-            # 有入侵
+            # 检测到目标
             if self.intrusion_state['first_time'] is None:
-                # 首次入侵，记录开始时间
+                # 首次检测到，记录开始时间
                 self.intrusion_state['first_time'] = current_time
+                self.intrusion_state['last_seen_time'] = current_time
                 print(f"[入侵检测] 检测到入侵 (消抖中...)")
             else:
-                # 持续入侵，检查是否达到报警条件
+                # 持续检测到目标，更新最后看到时间
+                self.intrusion_state['last_seen_time'] = current_time
+
+                # 检查是否达到报警条件
                 duration = current_time - self.intrusion_state['first_time']
 
                 # 条件1：持续时间超过首次报警时间（消抖）
@@ -190,12 +199,22 @@ class AlarmManager:
 
                         print(f"[入侵检测] 🚨 报警触发! (持续 {duration:.1f}s, 检测数: {len(valid_detections)})")
         else:
-            # 无入侵，清除状态
+            # 当前帧未检测到目标
             if self.intrusion_state['first_time'] is not None:
-                duration = current_time - self.intrusion_state['first_time']
-                print(f"[入侵检测] 入侵结束 (持续 {duration:.1f}s)")
-                self.intrusion_state['first_time'] = None
-                self.intrusion_state['last_alarm_time'] = None
+                # 之前有入侵状态，检查是否超过容忍时间
+                if self.intrusion_state['last_seen_time'] is not None:
+                    gap = current_time - self.intrusion_state['last_seen_time']
+
+                    if gap > self.tolerance_time:
+                        # 超过容忍时间，认为入侵真正结束
+                        duration = self.intrusion_state['last_seen_time'] - self.intrusion_state['first_time']
+                        print(f"[入侵检测] 入侵结束 (持续 {duration:.1f}s, 容忍期后确认)")
+                        self.intrusion_state['first_time'] = None
+                        # 注意：不重置 last_alarm_time，以避免频繁报警（保持全局报警间隔限制）
+                        self.intrusion_state['last_seen_time'] = None
+                    else:
+                        # 在容忍时间内，保持状态不变
+                        print(f"[入侵检测] 暂时未检测到目标 (容忍中: {gap:.1f}s / {self.tolerance_time}s)")
 
         return alarms
 
@@ -269,6 +288,7 @@ class IntrusionDetectionSystem:
                  conf_threshold: float = 0.5,
                  first_alarm_duration: float = 2.0,
                  repeat_alarm_interval: float = 30.0,
+                 tolerance_time: float = 3.0,
                  save_height: int = 480,
                  save_width: int = 640,
                  target_size: int = 640,
@@ -281,6 +301,7 @@ class IntrusionDetectionSystem:
             conf_threshold: 置信度阈值
             first_alarm_duration: 首次报警时间（秒）
             repeat_alarm_interval: 重复报警间隔（秒）
+            tolerance_time: 容忍时间（秒），检测不到目标后的宽限期
             save_height: 保存报警的图片高度
             save_width: 保存报警的图片宽度
             target_size: YOLO检测输入/目标尺寸
@@ -293,6 +314,7 @@ class IntrusionDetectionSystem:
             conf_threshold=conf_threshold,
             first_alarm_duration=first_alarm_duration,
             repeat_alarm_interval=repeat_alarm_interval,
+            tolerance_time=tolerance_time,
             save_height=save_height,
             save_width=save_width,
             alarm_url=alarm_url
@@ -606,7 +628,7 @@ def parse_args():
 
     # 输入输出
     parser.add_argument('--source', type=str,
-                       default='data/dataset/video_IR/INO_TreesAndRunner_T.avi',
+                       default='data/dataset/video_IR/INO_MainEntrance_T.avi',
                        help='视频路径、摄像头ID(0,1,...)或RTSP地址')
     parser.add_argument('--output-dir', type=str,
                        default='runs/intrusion_detection',
@@ -619,12 +641,14 @@ def parse_args():
                        help='保存报警截图')
 
     # 报警参数
-    parser.add_argument('--conf-threshold', type=float, default=0.5,
+    parser.add_argument('--conf-threshold', type=float, default=0.25,
                        help='置信度阈值')
     parser.add_argument('--first-alarm-duration', type=float, default=1.0,
                        help='首次报警时间（秒）- 消抖')
     parser.add_argument('--repeat-alarm-interval', type=float, default=30.0,
                        help='重复报警间隔（秒）')
+    parser.add_argument('--tolerance-time', type=float, default=3.0,
+                       help='容忍时间（秒）- 检测不到目标后的宽限期')
     parser.add_argument('--save-width', type=int, default=1280,
                        help='保存的报警图片宽度')
     parser.add_argument('--save-height', type=int, default=720,
@@ -659,6 +683,7 @@ def main():
         conf_threshold=args.conf_threshold,
         first_alarm_duration=args.first_alarm_duration,
         repeat_alarm_interval=args.repeat_alarm_interval,
+        tolerance_time=args.tolerance_time,
         save_height=args.save_height,
         save_width=args.save_width,
         target_size=args.target_size,

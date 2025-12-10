@@ -579,6 +579,7 @@ class AlarmManager:
                  conf_threshold: float = 0.25,
                  first_alarm_duration: float = 1.0,
                  repeat_alarm_interval: float = 30.0,
+                 tolerance_time: float = 3.0,
                  save_height: Optional[int] = None,
                  save_width: Optional[int] = None):
         """
@@ -586,6 +587,7 @@ class AlarmManager:
             conf_threshold: 置信度阈值
             first_alarm_duration: 首次报警时间（秒）
             repeat_alarm_interval: 重复报警间隔（秒）
+            tolerance_time: 容忍时间（秒），检测不到目标后的宽限期，防止短暂丢失导致状态重置
             save_height: 保存报警图片高度
             save_width: 保存报警图片宽度
         """
@@ -594,11 +596,13 @@ class AlarmManager:
         self.repeat_alarm_interval = repeat_alarm_interval
         self.save_height = save_height
         self.save_width = save_width
+        self.tolerance_time = tolerance_time
 
         # 入侵状态
         self.intrusion_state = {
             'first_time': None,
-            'last_alarm_time': None
+            'last_alarm_time': None,
+            'last_seen_time': None     # 最后一次看到目标的时间（容忍机制关键）
         }
 
     def update_intrusion(self, detections: List[Dict], frame: np.ndarray) -> List[Dict]:
@@ -623,9 +627,13 @@ class AlarmManager:
             if self.intrusion_state['first_time'] is None:
                 # 首次入侵
                 self.intrusion_state['first_time'] = current_time
+                self.intrusion_state['last_seen_time'] = current_time
                 logger.debug(f"检测到入侵 (消抖中...)")
             else:
-                # 持续入侵
+                # 持续检测到目标，更新最后看到时间
+                self.intrusion_state['last_seen_time'] = current_time
+
+                # 检查是否满足报警条件
                 duration = current_time - self.intrusion_state['first_time']
 
                 # 条件1：持续时间超过首次报警时间
@@ -643,12 +651,20 @@ class AlarmManager:
 
                         logger.info(f"🚨 报警触发! (持续 {duration:.1f}s, 检测数: {len(valid_detections)})")
         else:
-            # 无入侵
+            # 当前帧未检测到目标
             if self.intrusion_state['first_time'] is not None:
-                duration = current_time - self.intrusion_state['first_time']
-                logger.debug(f"入侵结束 (持续 {duration:.1f}s)")
-                self.intrusion_state['first_time'] = None
-                self.intrusion_state['last_alarm_time'] = None
+                # 之前有入侵状态，检查容忍时间
+                if self.intrusion_state['last_seen_time'] is not None:
+                    gap = current_time - self.intrusion_state['last_seen_time']
+                    if gap >= self.tolerance_time:
+                        # 超过容忍时间，认为入侵真正结束
+                        duration = self.intrusion_state['last_seen_time'] - self.intrusion_state['first_time']
+                        logger.info(f"[入侵检测] 入侵结束 (持续 {duration:.1f}s)")
+                        self.intrusion_state['first_time'] = None
+                        self.intrusion_state['last_seen_time'] = None
+                    else:
+                        logger.info(f"[入侵检测] 暂时未检测到目标 (容忍中: {gap:.1f}s / {self.tolerance_time}s)")
+
 
         return alarms
 
@@ -683,7 +699,7 @@ class AlarmManager:
 # ============ 单通道检测器（进程独立运行）============
 def stream_detector_worker(config: Dict, api_base_url: str, api_token: str,
                           model_yaml: str, model_weights: str, device: str,
-                          target_size: int, process_fps: float,
+                          target_size: int, process_fps: float, tolerance_time: float,
                           stop_event):
     """
     单个视频流检测进程的工作函数
@@ -697,6 +713,7 @@ def stream_detector_worker(config: Dict, api_base_url: str, api_token: str,
         device: 设备
         target_size: YOLO检测目标尺寸
         process_fps: 处理帧率
+        tolerance_time: 容忍时间
         stop_event: 停止信号
     """
     device_id = config['device_id']
@@ -764,6 +781,7 @@ def stream_detector_worker(config: Dict, api_base_url: str, api_token: str,
                 conf_threshold=config['sensitivity'],
                 first_alarm_duration=config['first_alarm_time'],
                 repeat_alarm_interval=config['repeated_alarm_time'],
+                tolerance_time=tolerance_time,
                 save_height=config['frontend_height'],
                 save_width=config['frontend_width']
             )
@@ -883,7 +901,7 @@ class DetectionManager:
     """多流检测管理器"""
 
     def __init__(self, api_client: APIClient, model_yaml: str, model_weights: str,
-                 device: str = 'cuda:0', target_size: int = 640, process_fps: float = 10.0):
+                 device: str = 'cuda:0', target_size: int = 640, process_fps: float = 10.0, tolerance_time: float = 3.0):
         """
         Args:
             api_client: API客户端
@@ -892,6 +910,7 @@ class DetectionManager:
             device: 设备
             target_size: YOLO检测目标尺寸
             process_fps: 处理帧率
+            tolerance_time: 容忍时间（秒）
         """
         self.api_client = api_client
         self.model_yaml = model_yaml
@@ -899,6 +918,7 @@ class DetectionManager:
         self.device = device
         self.target_size = target_size
         self.process_fps = process_fps
+        self.tolerance_time = tolerance_time
 
         # 检测进程字典: {(device_id, channel_id): {'process': ..., 'stop_event': ..., 'config': ...}}
         self.detectors = {}
@@ -917,7 +937,7 @@ class DetectionManager:
             target=stream_detector_worker,
             args=(config, self.api_client.base_url, self.api_client.token,
                  self.model_yaml, self.model_weights, self.device,
-                 self.target_size, self.process_fps, stop_event),
+                 self.target_size, self.process_fps, self.tolerance_time, stop_event),
             daemon=True
         )
 
@@ -1016,6 +1036,8 @@ def main():
                        help='每秒处理帧数（抽帧）')
     parser.add_argument('--config-update-interval', type=int, default=30,
                        help='配置更新间隔（秒）')
+    parser.add_argument('--tolerance-time', type=float, default=3.0,
+                       help='容忍时间（秒）- 检测不到目标后的宽限期')
 
     args = parser.parse_args()
 
@@ -1055,7 +1077,8 @@ def main():
         model_weights=args.weights,
         device=args.device,
         target_size=args.target_size,
-        process_fps=args.process_fps
+        process_fps=args.process_fps,
+        tolerance_time=args.tolerance_time
     )
 
     # 启动所有启用的通道

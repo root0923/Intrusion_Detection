@@ -242,7 +242,7 @@ def parse_args():
 
     parser.add_argument('--source', type=str, required=True,
                        help='视频路径、摄像头ID(0,1,...)或RTSP地址')
-    parser.add_argument('--output', type=str, default='regional_intrusion/roi_config.json',
+    parser.add_argument('--output', type=str, default='area_intrusion/roi_config.json',
                        help='输出配置文件路径 (默认: regional_intrusion/roi_config.json)')
 
     return parser.parse_args()
