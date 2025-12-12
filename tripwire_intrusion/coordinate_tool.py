@@ -252,7 +252,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='绊线坐标标定工具')
     parser.add_argument('--source', type=str, required=True,
                        help='视频路径或摄像头ID (0, 1, ...)')
-    parser.add_argument('--output', type=str, default='tripwire_config.json',
+    parser.add_argument('--output', type=str, default='tripwire_intrusion/config_line.json',
                        help='输出配置文件路径 (默认: tripwire_config.json)')
     return parser.parse_args()
 

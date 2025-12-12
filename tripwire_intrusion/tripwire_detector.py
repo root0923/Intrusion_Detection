@@ -470,7 +470,7 @@ def parse_args():
                        help='推理图像尺寸')
 
     # 检测参数
-    parser.add_argument('--conf-thresh', type=float, default=0.25,
+    parser.add_argument('--conf-thresh', type=float, default=0.5,
                        help='置信度阈值')
     parser.add_argument('--nms-iou', type=float, default=0.7,
                        help='NMS IoU阈值')
@@ -506,13 +506,13 @@ def parse_args():
     # 报警与保存参数
     parser.add_argument('--alarm-url', type=str, default=None,
                        help='报警接口URL (POST JSON)')
-    parser.add_argument('--save-width', type=int, default=1280,
+    parser.add_argument('--save-width', type=int, default=640,
                        help='报警图片保存/上传宽度')
-    parser.add_argument('--save-height', type=int, default=720,
+    parser.add_argument('--save-height', type=int, default=480,
                        help='报警图片保存/上传高度')
-    parser.add_argument('--process-fps', type=float, default=5.0,
+    parser.add_argument('--process-fps', type=float, default=5,
                        help='每秒处理帧数（抽帧），例如2表示每秒处理2帧）')
-    parser.add_argument('--repeat-alarm-interval', type=float, default=30.0,
+    parser.add_argument('--repeat-alarm-interval', type=float, default=2.0,
                        help='重复报警最小间隔（秒）')
 
     return parser.parse_args()

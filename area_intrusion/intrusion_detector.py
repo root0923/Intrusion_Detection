@@ -628,7 +628,7 @@ def parse_args():
 
     # 输入输出
     parser.add_argument('--source', type=str,
-                       default='data/dataset/video_IR/INO_MainEntrance_T.avi',
+                       default='data/dataset/video_IR/INO_ParkingEvening_T.avi',
                        help='视频路径、摄像头ID(0,1,...)或RTSP地址')
     parser.add_argument('--output-dir', type=str,
                        default='runs/intrusion_detection',
@@ -641,7 +641,7 @@ def parse_args():
                        help='保存报警截图')
 
     # 报警参数
-    parser.add_argument('--conf-threshold', type=float, default=0.25,
+    parser.add_argument('--conf-threshold', type=float, default=0.5,
                        help='置信度阈值')
     parser.add_argument('--first-alarm-duration', type=float, default=1.0,
                        help='首次报警时间（秒）- 消抖')
@@ -649,13 +649,13 @@ def parse_args():
                        help='重复报警间隔（秒）')
     parser.add_argument('--tolerance-time', type=float, default=3.0,
                        help='容忍时间（秒）- 检测不到目标后的宽限期')
-    parser.add_argument('--save-width', type=int, default=1280,
+    parser.add_argument('--save-width', type=int, default=640,
                        help='保存的报警图片宽度')
-    parser.add_argument('--save-height', type=int, default=720,
+    parser.add_argument('--save-height', type=int, default=480,
                        help='保存的报警图片高度')
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO 检测输入/目标尺寸 (target_size)')
-    parser.add_argument('--process-fps', type=float, default=10.0,
+    parser.add_argument('--process-fps', type=float, default=5.0,
                        help='每秒处理帧数（抽帧），例如 2 表示每秒抽取2帧进行检测）')
     parser.add_argument('--alarm-url', type=str, default=None,
                        help='报警接口URL')
