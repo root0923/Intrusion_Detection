@@ -149,7 +149,7 @@ class RuleEngine(ABC):
             "channelId": self.device_info.get('channelId', ''),
             "channelName": self.device_info.get('channelName', ''),
             "channelCode": self.device_info.get('channelCode', ''),
-            "alarmPicCode": image_base64,
+            "alarmPicture": image_base64,
             "nodeType": "2",
             "alarmDate": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             "alarmType": alarm_type,
