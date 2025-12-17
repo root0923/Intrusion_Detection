@@ -89,7 +89,7 @@ def main():
 
     # 1. 配置参数
     tripwire_config_path = "tripwire_intrusion/config_line.json"
-    video_source = r"data\dataset\video_IR\1230_1202.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = r"data\dataset\video_IR\test3.mp4"  # 0=摄像头, 或者视频文件路径
 
     # 假设配置文件中的坐标是基于640x480的
     config_width = 640
