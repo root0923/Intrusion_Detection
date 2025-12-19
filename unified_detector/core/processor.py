@@ -68,6 +68,14 @@ class CameraProcessor:
         self.actual_width = None
         self.actual_height = None
 
+        # 性能统计
+        self.perf_stats = {
+            'inference_times': [],  # 推理时间
+            'rule_times': [],  # 规则处理时间
+            'total_times': [],  # 总处理时间
+            'processed_frames': 0
+        }
+
         # 组件
         self.detector = None
         self.api_client = None
@@ -192,17 +200,21 @@ class CameraProcessor:
 
                 # 3. 抽帧检测
                 if (self.frame_count - 1) % process_interval == 0:
+                    process_start = time.time()
                     current_time = time.time()
 
                     # 4. 统一推理（一次）
+                    inference_start = time.time()
                     detections = self.detector.detect_and_track(
                         frame,
                         conf_threshold=0.25,  # 统一用0.25，后续规则再过滤
                         iou_threshold=0.7,
                         target_size=self.target_size
                     )
+                    inference_time = (time.time() - inference_start) * 1000  # 转为ms
 
                     # 5. 遍历所有规则处理
+                    rules_start = time.time()
                     for rule_type, rule in list(self.rules.items()):
                         try:
                             # 所有规则统一处理（容忍时间在规则内部实现）
@@ -215,6 +227,20 @@ class CameraProcessor:
                         except Exception as e:
                             logger.error(f"[{self.camera_key}] 规则处理异常 [{rule_type}]: {e}",
                                        exc_info=True)
+                    rules_time = (time.time() - rules_start) * 1000  # 转为ms
+                    total_time = (time.time() - process_start) * 1000  # 转为ms
+
+                    # 性能统计
+                    self.perf_stats['inference_times'].append(inference_time)
+                    self.perf_stats['rule_times'].append(rules_time)
+                    self.perf_stats['total_times'].append(total_time)
+                    self.perf_stats['processed_frames'] += 1
+
+                    # 保持最近100帧的统计
+                    if len(self.perf_stats['inference_times']) > 100:
+                        self.perf_stats['inference_times'].pop(0)
+                        self.perf_stats['rule_times'].pop(0)
+                        self.perf_stats['total_times'].pop(0)
 
                     # # 6. 可视化检测结果（调试用）
                     # vis_frame = frame.copy()
@@ -234,9 +260,16 @@ class CameraProcessor:
                     # cv2.imshow(f'Camera: {self.camera_key}', vis_frame)
                     # cv2.waitKey(1)  # 1ms延迟，允许窗口更新
 
-                # 每5秒打印一次状态
-                if self.frame_count % (fps * 5) == 0:
-                    logger.debug(f"[{self.camera_key}] 已处理 {self.frame_count} 帧, "
+                # 每5秒打印一次状态和性能统计
+                if self.frame_count % (fps * 5) == 0 and self.perf_stats['processed_frames'] > 0:
+                    avg_inference = sum(self.perf_stats['inference_times']) / len(self.perf_stats['inference_times'])
+                    avg_rules = sum(self.perf_stats['rule_times']) / len(self.perf_stats['rule_times'])
+                    avg_total = sum(self.perf_stats['total_times']) / len(self.perf_stats['total_times'])
+
+                    logger.info(f"[{self.camera_key}] 帧: {self.frame_count} | "
+                               f"推理: {avg_inference:.1f}ms | "
+                               f"规则: {avg_rules:.1f}ms | "
+                               f"总计: {avg_total:.1f}ms | "
                                f"活跃规则: {list(self.rules.keys())}")
 
             except Exception as e:
