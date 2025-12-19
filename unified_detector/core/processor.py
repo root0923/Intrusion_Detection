@@ -251,6 +251,9 @@ class CameraProcessor:
 
                 logger.info(f"[{self.camera_key}] 收到配置更新")
 
+                # 坐标转换
+                ConfigParser.convert_coordinates(new_camera_config, self.actual_width, self.actual_height)
+
                 # 更新摄像头配置
                 self.camera_config = new_camera_config
 
@@ -281,6 +284,12 @@ class CameraProcessor:
                 # 更新现有规则
                 self.rules[rule_type].update_config(rule_config)
                 new_rules[rule_type] = self.rules[rule_type]
+                
+                # 绊线入侵需要重新设置图像高度（因为reset会重新创建TripwireMonitor）
+                if rule_type == 'tripwire_intrusion' and self.actual_height is not None:
+                    self.rules[rule_type].monitor.set_image_height(self.actual_height)
+                    logger.debug(f"[{self.camera_key}] 绊线入侵规则已重新设置图像高度: {self.actual_height}")
+
                 logger.info(f"[{self.camera_key}] 更新规则: {rule_type}")
             else:
                 # 创建新规则

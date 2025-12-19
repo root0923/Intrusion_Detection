@@ -136,9 +136,11 @@ class ConfigParser:
         roi_list = []
         algorithm_rule_points = rule.get('algorithmRulePoints', [])
         for point_item in algorithm_rule_points:
+            logger.debug(point_item)
             if point_item.get('groupType') != 'polygon':
                 continue
             point_str = point_item.get('pointStr', '')
+            logger.debug(point_str)
             if point_str:
                 try:
                     points = json.loads(point_str)
@@ -196,9 +198,11 @@ class ConfigParser:
         tripwire_lines = []
         algorithm_rule_points = rule.get('algorithmRulePoints', [])
         for point_item in algorithm_rule_points:
+            logger.debug(point_item)
             if point_item.get('groupType') != 'polyline':
                 continue
             point_str = point_item.get('pointStr', '')
+            logger.debug(point_str)
             if point_str:
                 try:
                     points = json.loads(point_str)

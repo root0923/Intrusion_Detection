@@ -27,13 +27,8 @@ warnings.filterwarnings('ignore')
 
 
 # ============ 配置日志 ============
-def setup_logging(log_dir: str = None):
+def setup_logging(log_dir: Path):
     """配置日志"""
-    if log_dir is None:
-        log_dir = Path(__file__).parent / 'log'
-    else:
-        log_dir = Path(log_dir)
-
     log_dir.mkdir(exist_ok=True, parents=True)
 
     # 日志文件路径（按日期分割）
@@ -41,7 +36,7 @@ def setup_logging(log_dir: str = None):
 
     # 配置日志
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
@@ -60,7 +55,7 @@ class ProcessManager:
     """多进程管理器"""
 
     def __init__(self, api_client: APIClient, model_yaml: str, model_weights: str,
-                 device: str, target_size: int, process_fps: float, tracker: str):
+                 device: str, target_size: int, process_fps: float, tracker: str, logdir: Path):
         """
         Args:
             api_client: API客户端
@@ -78,6 +73,7 @@ class ProcessManager:
         self.target_size = target_size
         self.process_fps = process_fps
         self.tracker = tracker
+        self.log_dir = logdir
 
         # 进程字典: {camera_key: {'process': Process, 'config_queue': Queue, 'config': Dict}}
         self.processes = {}
@@ -101,7 +97,7 @@ class ProcessManager:
             args=(camera_config, self.model_yaml, self.model_weights,
                  self.device, self.target_size, self.process_fps,
                  self.api_client.base_url, self.api_client.token,
-                 config_queue, self.tracker),
+                 config_queue, self.tracker, self.log_dir),
             daemon=True,
             name=f"Camera-{camera_key}"
         )
@@ -172,8 +168,20 @@ class ProcessManager:
 def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
                  device: str, target_size: int, process_fps: float,
                  api_base_url: str, api_token: str,
-                 config_queue: Queue, tracker: str):
+                 config_queue: Queue, tracker: str, log_dir: Path):
     """摄像头进程工作函数"""
+    log_file = log_dir / f"unified_detector_{datetime.now().strftime('%Y%m%d')}.log"
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_file, encoding='utf-8')
+        ],
+        force=True
+    )
     processor = CameraProcessor(
         camera_config, model_yaml, model_weights,
         device, target_size, process_fps,
@@ -226,7 +234,8 @@ def main():
     args = parser.parse_args()
 
     # 配置日志
-    logger = setup_logging(args.log_dir)
+    log_dir = Path(args.log_dir) if args.log_dir else Path(__file__).parent / 'log'
+    logger = setup_logging(log_dir)
 
     logger.info("="*60)
     logger.info("统一检测框架 - Unified Detection Framework")
@@ -265,7 +274,8 @@ def main():
         device=args.device,
         target_size=args.target_size,
         process_fps=args.process_fps,
-        tracker=args.tracker
+        tracker=args.tracker,
+        logdir=log_dir
     )
 
     # 启动所有摄像头进程
