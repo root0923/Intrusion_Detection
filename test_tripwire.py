@@ -61,13 +61,13 @@ def convert_tripwires_to_actual_size(tripwires, config_width, config_height, act
     return converted_lines
 
 
-def create_rule_config(tripwire_lines, actual_width, actual_height, direction='bidirectional', repeated_alarm_time=10.0):
+def create_rule_config(tripwire_lines, actual_width, actual_height, direction='double-direction', repeated_alarm_time=10.0):
     """创建规则配置（模拟API返回的配置格式）"""
     rule_config = {
         'enabled': True,
         'sensitivity': 0.45,  # 对应前端sensitivity=5
         'repeated_alarm_time': repeated_alarm_time,  # 测试用，10秒重复报警间隔
-        'direction': direction,  # 'left_to_right', 'right_to_left', 'bidirectional'
+        'direction': direction,  # 'left-to-right', 'right-to-left', 'double-direction'
         'frontend_width': actual_width,
         'frontend_height': actual_height,
         'tripwire_arrays': tripwire_lines,  # 转换后的绊线坐标
@@ -148,7 +148,7 @@ def main():
         converted_lines,
         actual_width,
         actual_height,
-        direction='bidirectional',  # 可以改成 'left_to_right' 或 'right_to_left'
+        direction='double-direction',  # 可以改成 'left-to-right' 或 'right-to-left'
         repeated_alarm_time=1.0
     )
     rule = TripwireRule(rule_config, camera_key="test_camera")

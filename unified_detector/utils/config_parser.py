@@ -136,11 +136,9 @@ class ConfigParser:
         roi_list = []
         algorithm_rule_points = rule.get('algorithmRulePoints', [])
         for point_item in algorithm_rule_points:
-            logger.debug(point_item)
             if point_item.get('groupType') != 'polygon':
                 continue
             point_str = point_item.get('pointStr', '')
-            logger.debug(point_str)
             if point_str:
                 try:
                     points = json.loads(point_str)
@@ -190,19 +188,19 @@ class ConfigParser:
         sensitivity = int(rule.get('sensitivity', 4))
         sensitivity = ConfigParser.SENSITIVITY_MAPPING.get(sensitivity, 0.55)
         repeated_alarm_time = float(rule.get('repeatedAlarmTime', 30.0))
-        direction = rule.get('direction', 'bidirectional')
+        direction = rule.get('direction', 'double-direction')
         frontend_width = int(rule.get('width', 1920))
         frontend_height = int(rule.get('height', 1080))
+
+        logger.debug(direction)
 
         # 解析绊线点位
         tripwire_lines = []
         algorithm_rule_points = rule.get('algorithmRulePoints', [])
         for point_item in algorithm_rule_points:
-            logger.debug(point_item)
             if point_item.get('groupType') != 'polyline':
                 continue
             point_str = point_item.get('pointStr', '')
-            logger.debug(point_str)
             if point_str:
                 try:
                     points = json.loads(point_str)

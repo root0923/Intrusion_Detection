@@ -83,7 +83,7 @@ class TripwireVisualizer:
             cv2.circle(frame, p2, 6, color, -1)
 
             # 绘制方向箭头
-            if tripwire.enabled and tripwire.direction != 'bidirectional':
+            if tripwire.enabled and tripwire.direction != 'double-direction':
                 self._draw_direction_arrow(frame, tripwire, color)
 
             # # 绘制标签
@@ -114,9 +114,9 @@ class TripwireVisualizer:
         perp_vec = perp_vec / np.linalg.norm(perp_vec) * 20  # 归一化并缩放
 
         # 根据方向决定箭头位置
-        if tripwire.direction == 'left_to_right':
+        if tripwire.direction == 'left-to-right':
             arrow_end = mid + perp_vec
-        else:  # right_to_left
+        else:  # right-to-left
             arrow_end = mid - perp_vec
 
         cv2.arrowedLine(frame, tuple(map(int, mid)), tuple(map(int, arrow_end)),

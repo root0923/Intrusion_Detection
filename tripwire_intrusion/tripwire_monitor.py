@@ -20,7 +20,7 @@ class Tripwire:
                 {
                     "id": "line_1",
                     "points": [[x1, y1], [x2, y2]],
-                    "direction": "left_to_right" | "right_to_left" | "bidirectional",
+                    "direction": "left-to-right" | "right-to-left" | "double-direction",
                     "enabled": true,
                     "alert_cooldown": 2.0
                 }
@@ -29,7 +29,7 @@ class Tripwire:
         self.points = config['points']
         self.p1 = tuple(self.points[0])
         self.p2 = tuple(self.points[1])
-        self.direction = config.get('direction', 'bidirectional')
+        self.direction = config.get('direction', 'double-direction')
         self.enabled = config.get('enabled', True)
         self.alert_cooldown = config.get('alert_cooldown', 2.0)
 
@@ -41,12 +41,12 @@ class Tripwire:
         检查穿越方向是否符合设定
 
         Args:
-            crossing_direction: 'left_to_right' 或 'right_to_left'
+            crossing_direction: 'left-to-right' 或 'right-to-left'
 
         Returns:
             bool: 是否允许
         """
-        if self.direction == 'bidirectional':
+        if self.direction == 'double-direction':
             return True
         return self.direction == crossing_direction
 

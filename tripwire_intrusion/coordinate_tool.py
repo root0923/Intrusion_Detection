@@ -23,7 +23,7 @@ class CoordinateTool:
         self.frame = None
         self.tripwires = []
         self.current_points = []
-        self.global_direction = "bidirectional"  # 全局方向设置
+        self.global_direction = "double-direction"  # 全局方向设置
         self.window_name = 'Coordinate Tool'
 
     def load_frame(self):
@@ -89,16 +89,16 @@ class CoordinateTool:
             return
 
         print("\n选择方向（应用于所有线段）:")
-        print("  1. left_to_right  (从左到右)")
-        print("  2. right_to_left  (从右到左)")
-        print("  3. bidirectional  (双向)")
+        print("  1. left-to-right  (从左到右)")
+        print("  2. right-to-left  (从右到左)")
+        print("  3. double-direction  (双向)")
 
         choice = input("请输入 (1/2/3): ").strip()
 
         direction_map = {
-            '1': 'left_to_right',
-            '2': 'right_to_left',
-            '3': 'bidirectional'
+            '1': 'left-to-right',
+            '2': 'right-to-left',
+            '3': 'double-direction'
         }
 
         if choice in direction_map:
@@ -228,9 +228,9 @@ class CoordinateTool:
 
         # 显示每条线段的信息
         direction_cn = {
-            'left_to_right': '左→右',
-            'right_to_left': '右→左',
-            'bidirectional': '双向'
+            'left-to-right': '左→右',
+            'right-to-left': '右→左',
+            'double-direction': '双向'
         }.get(self.global_direction, self.global_direction)
 
         print(f"  线段明细:")

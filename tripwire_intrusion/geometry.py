@@ -65,8 +65,8 @@ def compute_crossing_direction(line_p1: Tuple[float, float],
 
     Returns:
         str or None: 穿越方向
-            - 'left_to_right': 从左侧到右侧
-            - 'right_to_left': 从右侧到左侧
+            - 'left-to-right': 从左侧到右侧
+            - 'right-to-left': 从右侧到左侧
             - None: 未穿越
     """
     # 如果提供了图像高度，转换到传统坐标系（左下角为原点，Y轴向上）
@@ -100,9 +100,9 @@ def compute_crossing_direction(line_p1: Tuple[float, float],
         # cross_curr < 0: 当前位置在右侧
         # 则是从左到右穿越
         if cross_prev > 0:
-            return 'left_to_right'
+            return 'left-to-right'
         else:
-            return 'right_to_left'
+            return 'right-to-left'
 
     return None
 

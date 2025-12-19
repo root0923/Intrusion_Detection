@@ -59,7 +59,7 @@ class TripwireRule(RuleEngine):
     def _init_rule_specific(self):
         """初始化绊线入侵特定配置"""
         # 绊线特有配置
-        self.direction = self.rule_config.get('direction', 'bidirectional')
+        self.direction = self.rule_config.get('direction', 'double-direction')
         self.frontend_width = self.rule_config.get('frontend_width', 1920)
         self.frontend_height = self.rule_config.get('frontend_height', 1080)
         self.tripwire_lines = self.rule_config.get('tripwire_arrays', [])  # 转换后的绊线坐标
@@ -229,7 +229,7 @@ class TripwireRule(RuleEngine):
         self.rule_config = new_config
         self.sensitivity = new_config.get('sensitivity', 0.75)
         self.repeated_alarm_time = new_config.get('repeated_alarm_time', 30.0)
-        self.direction = new_config.get('direction', 'bidirectional')
+        self.direction = new_config.get('direction', 'double-direction')
         self.tripwire_lines = new_config.get('tripwire_arrays', [])
         self.device_info = new_config.get('device_info', {})
 
