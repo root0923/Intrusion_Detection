@@ -15,11 +15,11 @@ from typing import Dict, Optional
 from multiprocessing import Queue
 from .detector import UnifiedDetector
 from .api_client import APIClient
-from ..rules.area_intrusion import AreaIntrusionRule
-from ..rules.water_safety import WaterSafetyRule
-from ..rules.tripwire import TripwireRule
-from ..utils.config_parser import ConfigParser
-
+from unified_detector.rules.area_intrusion import AreaIntrusionRule
+from unified_detector.rules.water_safety import WaterSafetyRule
+from unified_detector.rules.tripwire import TripwireRule
+from unified_detector.utils.config_parser import ConfigParser
+from unified_detector.utils.geometry import draw_detections
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +89,8 @@ class CameraProcessor:
             # 2. 获取视频流地址
             logger.info(f"[{self.camera_key}] 获取视频流地址...")
             stream_url = self.api_client.get_stream_url(
-                self.camera_config['device_id'],
-                self.camera_config['channel_id']
+                self.camera_config['device_code'],
+                self.camera_config['channel_code']
             )
 
             if not stream_url:
@@ -216,6 +216,24 @@ class CameraProcessor:
                             logger.error(f"[{self.camera_key}] 规则处理异常 [{rule_type}]: {e}",
                                        exc_info=True)
 
+                    # # 6. 可视化检测结果（调试用）
+                    # vis_frame = frame.copy()
+
+                    # # 绘制检测框
+                    # vis_frame = draw_detections(vis_frame, detections,
+                    #                           conf_threshold=0.25,
+                    #                           class_names={0: 'person'})
+
+                    # # 添加摄像头信息
+                    # info_text = f"Camera: {self.camera_key} | Frame: {self.frame_count} | Detections: {len(detections)}"
+                    # cv2.putText(vis_frame, info_text, (10, 30),
+                    #           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    # vis_frame = cv2.resize(vis_frame, (640, 480))
+
+                    # # 显示图像
+                    # cv2.imshow(f'Camera: {self.camera_key}', vis_frame)
+                    # cv2.waitKey(1)  # 1ms延迟，允许窗口更新
+
                 # 每5秒打印一次状态
                 if self.frame_count % (fps * 5) == 0:
                     logger.debug(f"[{self.camera_key}] 已处理 {self.frame_count} 帧, "
@@ -292,4 +310,5 @@ class CameraProcessor:
         self.running = False
         if self.cap:
             self.cap.release()
+        # cv2.destroyAllWindows()  # 关闭所有显示窗口
         logger.info(f"[{self.camera_key}] 处理器已停止")

@@ -205,7 +205,7 @@ class TripwireRule(RuleEngine):
         # 创建报警数据
         alarm_data = self._create_alarm_data(
             alarm_type="tripwire_intrusion",
-            alarm_type_name="绊线入侵",
+            alarm_type_name="绊线检测",
             image_base64=image_base64
         )
 

@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 import torch
 
-model = YOLO('data/LLVIP_IF-yolo11x-e300-16-pretrained.pt')
+model = YOLO('data/LLVIP-yolo11m-e300-16-pretrained.pt')
 
 # 检查模型配置
 if hasattr(model.model, 'yaml'):

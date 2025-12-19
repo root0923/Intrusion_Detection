@@ -86,10 +86,10 @@ def main():
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = r"data\dataset\video_IR\test2.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = r"data\dataset\video_IR\test00.mp4"  # 0=摄像头, 或者视频文件路径
 
-    model_yaml = "ultralytics/cfg/models/11/yolo11x.yaml"
-    model_weights = "data/LLVIP_IF-yolo11x-e300-16-pretrained.pt"
+    model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
+    model_weights = "data/LLVIP-yolo11m-e300-16-pretrained.pt"
     device = "cuda:0"  # 或 "cpu"
     tracker = "bytetrack"
     target_size = 800
@@ -202,7 +202,7 @@ def main():
 
                     # 手动更新报警时间（测试中没有真实API）
                     rule.last_alarm_time = current_time
-                    base64_image = alarm_info.get('alarmPicCode', '')
+                    base64_image = alarm_info.get('alarmPicture', '')
                     #保存报警截图
                     image_data = cv2.imdecode(
                         np.frombuffer(base64.b64decode(base64_image), np.uint8),

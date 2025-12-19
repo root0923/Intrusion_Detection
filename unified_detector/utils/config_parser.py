@@ -72,7 +72,7 @@ class ConfigParser:
                     channel_code = channel.get('channelCode', '')
 
                     # 摄像头唯一标识
-                    camera_key = f"{device_id}_{channel_id}"
+                    camera_key = f"{device_code}_{channel_code}"
 
                     # 初始化摄像头配置
                     if camera_key not in camera_configs:

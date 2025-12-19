@@ -22,6 +22,8 @@ import traceback
 from core.api_client import APIClient
 from core.processor import CameraProcessor
 from utils.config_parser import ConfigParser
+import warnings
+warnings.filterwarnings('ignore')
 
 
 # ============ 配置日志 ============
@@ -187,19 +189,19 @@ def main():
     parser = argparse.ArgumentParser(description='统一检测框架 - Unified Detection Framework')
 
     # API配置
-    parser.add_argument('--api-url', type=str, required=True,
+    parser.add_argument('--api-url', type=str, default="http://localhost:9199",
                        help='后端API基础URL（如 http://localhost:8080）')
-    parser.add_argument('--username', type=str, required=True,
+    parser.add_argument('--username', type=str, default='jzsx',
                        help='登录用户名')
-    parser.add_argument('--password', type=str, required=True,
+    parser.add_argument('--password', type=str, default='JZSXKJ@2025',
                        help='登录密码')
 
     # 模型配置
     parser.add_argument('--model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11x.yaml",
+                       default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP_IF-yolo11x-e300-16-pretrained.pt',
+                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
                        help='模型权重文件')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='设备 (cuda:0 或 cpu)')

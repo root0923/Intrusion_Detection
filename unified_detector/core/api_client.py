@@ -30,21 +30,15 @@ def aes_encrypt_password(password: str) -> str:
     Returns:
         str: 十六进制编码的加密密文
     """
-    # AES密钥和IV（固定值，与后端保持一致）
-    AES_KEY = b'JzjPLY9632AijnEQ'  # 16字节
-    AES_IV = b'DYgjCEIikmj2W9xN'   # 16字节
+    # AES密钥和IV
+    AES_KEY = b'JzjPLY9632AijnEQ'
+    AES_IV = b'DYgjCEIikmj2W9xN'
 
     try:
-        # 创建AES加密器（CBC模式，PKCS7Padding）
         cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
-
-        # PKCS7填充
         padded_data = pad(password.encode('utf-8'), AES.block_size)
-
-        # 加密
         encrypted_data = cipher.encrypt(padded_data)
 
-        # 十六进制编码
         encrypted_hex = encrypted_data.hex()
 
         return encrypted_hex

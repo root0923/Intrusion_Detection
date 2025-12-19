@@ -226,7 +226,7 @@ def main():
                     vis_frame = draw_alarm_text(vis_frame, "TRIPWIRE CROSSED!")
                     # 手动更新报警时间（测试中没有真实API）
                     rule.last_alarm_time = current_time
-                    base64_image = alarm_info.get('alarmPicCode', '')
+                    base64_image = alarm_info.get('alarmPicture', '')
                     #保存报警截图
                     image_data = cv2.imdecode(
                         np.frombuffer(base64.b64decode(base64_image), np.uint8),

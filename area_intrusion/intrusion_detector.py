@@ -613,10 +613,10 @@ def parse_args():
 
     # 模型参数
     parser.add_argument('--model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11x.yaml",
+                       default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP_IF-yolo11x-e300-16-pretrained.pt',
+                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
                        help='模型权重文件')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='设备 (cuda:0 或 cpu)')
@@ -628,7 +628,7 @@ def parse_args():
 
     # 输入输出
     parser.add_argument('--source', type=str,
-                       default='data/dataset/video_IR/INO_ParkingEvening_T.avi',
+                       default='data/dataset/video_IR/test0.avi',
                        help='视频路径、摄像头ID(0,1,...)或RTSP地址')
     parser.add_argument('--output-dir', type=str,
                        default='runs/intrusion_detection',
@@ -653,7 +653,7 @@ def parse_args():
                        help='保存的报警图片宽度')
     parser.add_argument('--save-height', type=int, default=480,
                        help='保存的报警图片高度')
-    parser.add_argument('--target-size', type=int, default=640,
+    parser.add_argument('--target-size', type=int, default=800,
                        help='YOLO 检测输入/目标尺寸 (target_size)')
     parser.add_argument('--process-fps', type=float, default=5.0,
                        help='每秒处理帧数（抽帧），例如 2 表示每秒抽取2帧进行检测）')
