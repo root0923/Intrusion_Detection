@@ -1,0 +1,67 @@
+{
+  "tripwires": [
+    {
+      "id": "34020000001180000001_34020000001310000002_line_0",
+      "points": [
+        [
+          1788,
+          132
+        ],
+        [
+          1057,
+          1408
+        ]
+      ],
+      "direction": "left-to-right",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    },
+    {
+      "id": "34020000001180000001_34020000001310000002_line_1",
+      "points": [
+        [
+          1057,
+          1408
+        ],
+        [
+          1054,
+          1408
+        ]
+      ],
+      "direction": "left-to-right",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    },
+    {
+      "id": "34020000001180000001_34020000001310000002_line_2",
+      "points": [
+        [
+          1054,
+          1408
+        ],
+        [
+          1054,
+          1408
+        ]
+      ],
+      "direction": "left-to-right",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    }
+  ]
+}

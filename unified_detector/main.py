@@ -21,6 +21,7 @@ import traceback
 
 from core.api_client import APIClient
 from core.processor import CameraProcessor
+from core.model_server import ModelServer
 from utils.config_parser import ConfigParser
 import warnings
 warnings.filterwarnings('ignore')
@@ -52,33 +53,78 @@ def setup_logging(log_dir: Path):
 
 # ============ 进程管理器 ============
 class ProcessManager:
-    """多进程管理器"""
+    """多进程管理器（支持两种模式：ModelServer或多进程独立模型）"""
 
     def __init__(self, api_client: APIClient, model_yaml: str, model_weights: str,
-                 device: str, target_size: int, process_fps: float, tracker: str, logdir: Path):
+                 thermal_model_yaml: str, thermal_model_weights: str,
+                 device: str, target_size: int, process_fps: float, tracker: str, logdir: Path,
+                 use_model_server: bool = False):
         """
         Args:
             api_client: API客户端
-            model_yaml: 模型配置文件路径
-            model_weights: 模型权重文件路径
+            model_yaml: 可见光模型配置文件路径
+            model_weights: 可见光模型权重文件路径
+            thermal_model_yaml: 热成像模型配置文件路径
+            thermal_model_weights: 热成像模型权重文件路径
             device: 设备
             target_size: 推理图像尺寸
             process_fps: 处理帧率
             tracker: 跟踪器类型
+            logdir: 日志目录
+            use_model_server: 是否使用集中式模型服务器
+                - True: 节省显存（所有进程共享1个模型），但推理串行，延迟高
+                - False: 每个进程独立加载模型，显存占用大，但推理并行，延迟低
         """
         self.api_client = api_client
         self.model_yaml = model_yaml
         self.model_weights = model_weights
+        self.thermal_model_yaml = thermal_model_yaml
+        self.thermal_model_weights = thermal_model_weights
         self.device = device
         self.target_size = target_size
         self.process_fps = process_fps
         self.tracker = tracker
         self.log_dir = logdir
+        self.use_model_server = use_model_server
 
         # 进程字典: {camera_key: {'process': Process, 'config_queue': Queue, 'config': Dict}}
         self.processes = {}
 
+        # 模型服务器（仅在use_model_server=True时使用）
+        self.model_server = None
+        self.request_queue = None
+        self.response_queues = None
+
         self.logger = logging.getLogger(__name__)
+
+        # 条件性启动模型服务器
+        if self.use_model_server:
+            self._start_model_server()
+        else:
+            self.logger.info("使用多进程独立模型模式（每个进程加载独立模型）")
+            self.logger.info("  优点：推理并行，延迟低")
+            self.logger.info("  缺点：GPU显存占用大（每路约1-2GB）")
+
+    def _start_model_server(self):
+        """启动集中式模型服务器"""
+        self.logger.info("正在启动集中式模型服务器（双模型）...")
+        self.logger.info(f"  这将大幅节省GPU显存（每路节省 ~1-2GB）")
+
+        self.model_server = ModelServer(
+            model_yaml=self.model_yaml,
+            model_weights=self.model_weights,
+            thermal_model_yaml=self.thermal_model_yaml,
+            thermal_model_weights=self.thermal_model_weights,
+            device=self.device,
+            tracker=self.tracker
+        )
+        self.model_server.start()
+
+        # 获取共享队列
+        self.request_queue = self.model_server.request_queue
+        self.response_queues = self.model_server.response_queues
+
+        self.logger.info("✓ 模型服务器已启动（双模型：可见光+热成像）")
 
     def start_process(self, camera_config: Dict):
         """启动单个摄像头进程"""
@@ -91,16 +137,50 @@ class ProcessManager:
         # 创建配置更新队列
         config_queue = Queue()
 
-        # 创建进程
-        process = Process(
-            target=camera_worker,
-            args=(camera_config, self.model_yaml, self.model_weights,
-                 self.device, self.target_size, self.process_fps,
-                 self.api_client.base_url, self.api_client.token,
-                 config_queue, self.tracker, self.log_dir),
-            daemon=True,
-            name=f"Camera-{camera_key}"
-        )
+        # 根据userType选择对应的模型
+        user_type = camera_config.get('user_type', '0')
+        if user_type == '1':
+            # 热成像通道
+            selected_model_yaml = self.thermal_model_yaml
+            selected_model_weights = self.thermal_model_weights
+            model_type_str = "热成像模型"
+        else:
+            # 可见光通道（默认）
+            selected_model_yaml = self.model_yaml
+            selected_model_weights = self.model_weights
+            model_type_str = "可见光模型"
+
+        self.logger.info(f"[{camera_key}] 通道类型: {'热成像' if user_type == '1' else '可见光'} (userType={user_type})，使用{model_type_str}")
+
+        # 根据模式准备参数
+        if self.use_model_server:
+            # ModelServer模式：预先创建响应队列
+            if camera_key not in self.response_queues:
+                self.response_queues[camera_key] = self.model_server.manager.Queue()
+
+            # 创建进程
+            process = Process(
+                target=camera_worker,
+                args=(camera_config, selected_model_yaml, selected_model_weights,
+                     self.device, self.target_size, self.process_fps,
+                     self.api_client.base_url, self.api_client.token,
+                     config_queue, self.tracker, self.log_dir,
+                     True, self.request_queue, self.response_queues),
+                daemon=True,
+                name=f"Camera-{camera_key}"
+            )
+        else:
+            # 独立模型模式：每个进程加载独立模型
+            process = Process(
+                target=camera_worker,
+                args=(camera_config, selected_model_yaml, selected_model_weights,
+                     self.device, self.target_size, self.process_fps,
+                     self.api_client.base_url, self.api_client.token,
+                     config_queue, self.tracker, self.log_dir,
+                     False, None, None),
+                daemon=True,
+                name=f"Camera-{camera_key}"
+            )
 
         process.start()
 
@@ -153,6 +233,11 @@ class ProcessManager:
         for camera_key in keys:
             self.stop_process(camera_key)
 
+        # 停止模型服务器
+        if self.model_server:
+            self.model_server.stop()
+            self.logger.info("✓ 模型服务器已停止")
+
         self.logger.info("✓ 所有进程已停止")
 
     def get_status(self) -> Dict:
@@ -168,8 +253,10 @@ class ProcessManager:
 def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
                  device: str, target_size: int, process_fps: float,
                  api_base_url: str, api_token: str,
-                 config_queue: Queue, tracker: str, log_dir: Path):
-    """摄像头进程工作函数"""
+                 config_queue: Queue, tracker: str, log_dir: Path,
+                 use_model_server: bool = False,
+                 request_queue=None, response_queues=None):
+    """摄像头进程工作函数（支持两种模式）"""
     log_file = log_dir / f"unified_detector_{datetime.now().strftime('%Y%m%d')}.log"
 
     logging.basicConfig(
@@ -182,11 +269,42 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
         ],
         force=True
     )
+
+    model_client = None
+
+    if use_model_server:
+        # ModelServer模式：创建轻量级客户端
+        from core.model_server import LightweightModelClient
+
+        # 根据user_type确定模型类型
+        user_type = camera_config.get('user_type', '0')
+        model_type = 'thermal' if user_type == '1' else 'visible'
+
+        model_client = LightweightModelClient(
+            camera_config['camera_key'],
+            request_queue,
+            response_queues,
+            model_type=model_type
+        )
+        # 模型参数设为None
+        model_yaml = None
+        model_weights = None
+        device = None
+        tracker = None
+
+    # 创建处理器
     processor = CameraProcessor(
-        camera_config, model_yaml, model_weights,
-        device, target_size, process_fps,
-        api_base_url, api_token,
-        config_queue, tracker
+        camera_config,
+        model_yaml=model_yaml,
+        model_weights=model_weights,
+        device=device,
+        target_size=target_size,
+        process_fps=process_fps,
+        api_base_url=api_base_url,
+        api_token=api_token,
+        config_queue=config_queue,
+        tracker=tracker,
+        model_client=model_client
     )
     processor.start()
 
@@ -204,13 +322,22 @@ def main():
     parser.add_argument('--password', type=str, default='JZSXKJ@2025',
                        help='登录密码')
 
-    # 模型配置
+    # 模型配置 - 可见光模型
     parser.add_argument('--model-yaml', type=str,
                        default="ultralytics/cfg/models/11/yolo11m.yaml",
-                       help='模型配置YAML文件')
+                       help='可见光模型配置YAML文件')
     parser.add_argument('--weights', type=str,
                        default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
-                       help='模型权重文件')
+                       help='可见光模型权重文件')
+
+    # 模型配置 - 热成像模型
+    parser.add_argument('--thermal-model-yaml', type=str,
+                       default="ultralytics/cfg/models/11/yolo11m.yaml",
+                       help='热成像模型配置YAML文件')
+    parser.add_argument('--thermal-weights', type=str,
+                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       help='热成像模型权重文件')
+
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='设备 (cuda:0 或 cpu)')
 
@@ -222,6 +349,10 @@ def main():
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        choices=['bytetrack', 'botsort'],
                        help='跟踪器类型')
+
+    # 性能优化
+    parser.add_argument('--use-model-server', action='store_true', default=False,
+                       help='使用集中式模型服务器（节省GPU显存，但推理为串行，延迟较高）')
 
     # 配置更新
     parser.add_argument('--config-update-interval', type=int, default=30,
@@ -271,11 +402,14 @@ def main():
         api_client=api_client,
         model_yaml=args.model_yaml,
         model_weights=args.weights,
+        thermal_model_yaml=args.thermal_model_yaml,
+        thermal_model_weights=args.thermal_weights,
         device=args.device,
         target_size=args.target_size,
         process_fps=args.process_fps,
         tracker=args.tracker,
-        logdir=log_dir
+        logdir=log_dir,
+        use_model_server=args.use_model_server
     )
 
     # 启动所有摄像头进程

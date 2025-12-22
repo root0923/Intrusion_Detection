@@ -21,6 +21,7 @@ from multiprocessing import Process, Queue
 
 from unified_detector.core.api_client import APIClient
 from unified_detector.core.processor import CameraProcessor
+from unified_detector.core.model_server import ModelServer
 from unified_detector.utils.config_parser import ConfigParser
 import warnings
 warnings.filterwarnings('ignore')
@@ -44,11 +45,10 @@ def setup_logging(log_dir: Path):
     return logging.getLogger(__name__)
 
 
-def camera_worker(camera_config, model_yaml, model_weights,
-                 device, target_size, process_fps,
-                 api_base_url, api_token,
-                 config_queue, tracker, log_dir):
-    """摄像头进程工作函数"""
+def camera_worker(camera_config, request_queue, response_queues,
+                 target_size, process_fps,
+                 api_base_url, api_token, config_queue, log_dir):
+    """摄像头进程工作函数（使用共享模型服务器）"""
     log_file = log_dir / f"stress_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
     logging.basicConfig(
@@ -62,11 +62,21 @@ def camera_worker(camera_config, model_yaml, model_weights,
         force=True
     )
 
+    # 创建轻量级ModelClient（响应队列已在主进程中创建）
+    from unified_detector.core.model_server import LightweightModelClient
+
+    model_client = LightweightModelClient(
+        camera_config['camera_key'],
+        request_queue,
+        response_queues
+    )
+
     processor = CameraProcessor(
-        camera_config, model_yaml, model_weights,
-        device, target_size, process_fps,
+        camera_config, None, None,  # model_yaml和weights设为None
+        None, target_size, process_fps,  # device设为None
         api_base_url, api_token,
-        config_queue, tracker
+        config_queue, None,  # tracker设为None
+        model_client=model_client  # 传入轻量级client
     )
     processor.start()
 
@@ -85,10 +95,10 @@ def main():
 
     # 模型配置
     parser.add_argument('--model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11m.yaml",
+                       default="ultralytics/cfg/models/11/yolo11n.yaml",
                        help='模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       default='data/LLVIP-yolo11n-e300-16-pretrained-.pt',
                        help='模型权重文件')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='设备 (cuda:0 或 cpu)')
@@ -96,13 +106,13 @@ def main():
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=10.0,
+    parser.add_argument('--process-fps', type=float, default=1,
                        help='每秒处理帧数')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        help='跟踪器类型')
 
     # 压测配置
-    parser.add_argument('--num-streams', type=int, default=20,
+    parser.add_argument('--num-streams', type=int, default=24,
                        help='并发流数量')
     parser.add_argument('--duration', type=int, default=300,
                        help='测试时长（秒）')
@@ -165,19 +175,44 @@ def main():
 
     logger.info(f"✓ 生成 {len(test_configs)} 路配置")
 
-    # 4. 启动所有进程
-    logger.info(f"\n[4/4] 启动 {args.num_streams} 个进程...")
+    # 3.5. 启动集中式模型服务器（关键！）
+    logger.info(f"\n[3.5/5] 启动集中式模型服务器...")
+    model_server = ModelServer(
+        model_yaml=args.model_yaml,
+        model_weights=args.weights,
+        device=args.device,
+        tracker=args.tracker
+    )
+    model_server.start()
+    logger.info(f"✓ 模型服务器已启动（所有进程共享1个模型）")
+    logger.info(f"  预计内存节省: {(args.num_streams - 1) * 2:.1f}GB")
+
+    # 4. 启动所有进程（无需错峰，因为不加载模型）
+    logger.info(f"\n[4/5] 启动 {args.num_streams} 个进程...")
     processes = {}
 
-    for camera_key, camera_config in test_configs.items():
+    # 获取共享队列（用于进程间通信）
+    request_queue = model_server.request_queue
+    response_queues = model_server.response_queues
+
+    # 预先为每个camera创建响应队列（使用ModelServer的manager）
+    logger.info("为所有camera创建响应队列...")
+    for camera_key in test_configs.keys():
+        # 使用ModelServer的manager来创建队列
+        response_queues[camera_key] = model_server.manager.Queue()
+
+    logger.info(f"✓ 已创建 {len(test_configs)} 个响应队列")
+
+    # 启动所有camera进程
+    for idx, (camera_key, camera_config) in enumerate(test_configs.items()):
         config_queue = Queue()
 
         process = Process(
             target=camera_worker,
-            args=(camera_config, args.model_yaml, args.weights,
-                 args.device, args.target_size, args.process_fps,
+            args=(camera_config, request_queue, response_queues,
+                 args.target_size, args.process_fps,
                  args.api_url, api_client.token,
-                 config_queue, args.tracker, log_dir),
+                 config_queue, log_dir),
             daemon=True,
             name=f"Camera-{camera_key}"
         )
@@ -185,7 +220,10 @@ def main():
         process.start()
         processes[camera_key] = process
 
-        logger.info(f"✓ 启动进程 {camera_key}")
+        logger.info(f"✓ 启动进程 {idx+1}/{args.num_streams}: {camera_key}")
+
+        # 轻微延迟，避免瞬时并发
+        time.sleep(0.2)
 
     logger.info(f"\n✓ 所有进程已启动，共 {len(processes)} 个")
     logger.info(f"测试将运行 {args.duration} 秒...")
@@ -217,6 +255,8 @@ def main():
     finally:
         # 6. 清理所有进程
         logger.info("\n清理资源...")
+
+        # 停止所有camera进程
         for camera_key, process in processes.items():
             if process.is_alive():
                 process.terminate()
@@ -225,7 +265,11 @@ def main():
                     process.kill()
                     logger.warning(f"强制终止进程: {camera_key}")
 
-        logger.info("✓ 所有进程已停止")
+        logger.info("✓ 所有camera进程已停止")
+
+        # 停止模型服务器
+        model_server.stop()
+        logger.info("✓ 模型服务器已停止")
 
 
 if __name__ == '__main__':

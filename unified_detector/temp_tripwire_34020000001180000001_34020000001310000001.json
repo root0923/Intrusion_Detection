@@ -1,0 +1,46 @@
+{
+  "tripwires": [
+    {
+      "id": "34020000001180000001_34020000001310000001_line_0",
+      "points": [
+        [
+          1367,
+          1011
+        ],
+        [
+          1871,
+          1103
+        ]
+      ],
+      "direction": "right-to-left",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    },
+    {
+      "id": "34020000001180000001_34020000001310000001_line_1",
+      "points": [
+        [
+          1871,
+          1103
+        ],
+        [
+          1882,
+          1109
+        ]
+      ],
+      "direction": "right-to-left",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    }
+  ]
+}

@@ -70,6 +70,7 @@ class ConfigParser:
                     channel_id = channel.get('channelId', '')
                     channel_name = channel.get('channelName', '')
                     channel_code = channel.get('channelCode', '')
+                    user_type = channel.get('userType', '0') # '0' 可见光；'1' 热成像
 
                     # 摄像头唯一标识
                     camera_key = f"{device_code}_{channel_code}"
@@ -85,6 +86,7 @@ class ConfigParser:
                             'channel_id': channel_id,
                             'channel_name': channel_name,
                             'channel_code': channel_code,
+                            'user_type': user_type,
                             'rules': {}
                         }
 
