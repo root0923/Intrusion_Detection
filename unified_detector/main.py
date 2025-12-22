@@ -344,7 +344,7 @@ def main():
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=10.0,
+    parser.add_argument('--process-fps', type=float, default=5.0,
                        help='每秒处理帧数（抽帧）')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        choices=['bytetrack', 'botsort'],
