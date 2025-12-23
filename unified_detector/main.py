@@ -386,10 +386,10 @@ def main():
 
     # 模型配置 - 热成像模型
     parser.add_argument('--thermal-model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11m.yaml",
+                       default="ultralytics/cfg/models/11/yolo11x.yaml",
                        help='热成像模型配置YAML文件')
     parser.add_argument('--thermal-weights', type=str,
-                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       default='data/LLVIP_IF-yolo11x-e300-16-pretrained.pt',
                        help='热成像模型权重文件')
 
     parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0'],
@@ -398,7 +398,7 @@ def main():
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=5.0,
+    parser.add_argument('--process-fps', type=float, default=1.0,
                        help='每秒处理帧数（抽帧）')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        choices=['bytetrack', 'botsort'],

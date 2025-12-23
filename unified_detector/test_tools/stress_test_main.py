@@ -133,18 +133,18 @@ def main():
 
     # 模型配置 - 可见光模型
     parser.add_argument('--model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11m.yaml",
+                       default="ultralytics/cfg/models/11/yolo11n.yaml",
                        help='可见光模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       default='data/LLVIP-yolo11n-e300-16-pretrained-.pt',
                        help='可见光模型权重文件')
 
     # 模型配置 - 热成像模型
     parser.add_argument('--thermal-model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11m.yaml",
+                       default="ultralytics/cfg/models/11/yolo11n.yaml",
                        help='热成像模型配置YAML文件')
     parser.add_argument('--thermal-weights', type=str,
-                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       default='data/LLVIP-yolo11n-e300-16-pretrained-.pt',
                        help='热成像模型权重文件')
 
     parser.add_argument('--device', type=str, default='cuda:0',
@@ -153,19 +153,19 @@ def main():
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=1.0,
+    parser.add_argument('--process-fps', type=float, default=2.0,
                        help='每秒处理帧数')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        help='跟踪器类型')
 
     # 性能优化
-    parser.add_argument('--use-model-server', action='store_true', default=False,
+    parser.add_argument('--use-model-server', action='store_true', default=True,
                        help='使用集中式模型服务器（节省显存，但推理串行）')
     parser.add_argument('--gpu-devices', type=str, default='0',
                        help='GPU设备列表，逗号分隔（如"0,1"表示使用cuda:0和cuda:1）')
 
     # 压测配置
-    parser.add_argument('--num-streams', type=int, default=8,
+    parser.add_argument('--num-streams', type=int, default=24,
                        help='并发流数量')
     parser.add_argument('--duration', type=int, default=300,
                        help='测试时长（秒）')

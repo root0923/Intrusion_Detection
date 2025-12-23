@@ -348,6 +348,8 @@ class CameraProcessor:
                     rules_time = (time.time() - rules_start) * 1000  # 转为ms
                     total_time = (time.time() - process_start) * 1000  # 转为ms
 
+                    logger.debug(f'规则耗时：{total_time}')
+
                     # 显式释放检测结果内存
                     del detections
 
