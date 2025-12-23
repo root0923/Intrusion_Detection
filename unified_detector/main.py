@@ -57,8 +57,10 @@ class ProcessManager:
 
     def __init__(self, api_client: APIClient, model_yaml: str, model_weights: str,
                  thermal_model_yaml: str, thermal_model_weights: str,
-                 device: str, target_size: int, process_fps: float, tracker: str, logdir: Path,
-                 use_model_server: bool = False):
+                 devices: list, target_size: int, process_fps: float, tracker: str, logdir: Path,
+                 use_model_server: bool = False,
+                 enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
+                 fps_active: float = 5.0, person_timeout: int = 5):
         """
         Args:
             api_client: API客户端
@@ -66,7 +68,7 @@ class ProcessManager:
             model_weights: 可见光模型权重文件路径
             thermal_model_yaml: 热成像模型配置文件路径
             thermal_model_weights: 热成像模型权重文件路径
-            device: 设备
+            devices: 设备列表（例如 ['cuda:0', 'cuda:1']）
             target_size: 推理图像尺寸
             process_fps: 处理帧率
             tracker: 跟踪器类型
@@ -74,21 +76,34 @@ class ProcessManager:
             use_model_server: 是否使用集中式模型服务器
                 - True: 节省显存（所有进程共享1个模型），但推理串行，延迟高
                 - False: 每个进程独立加载模型，显存占用大，但推理并行，延迟低
+            enable_adaptive_fps: 启用自适应帧率（仅对绊线入侵规则生效）
+            fps_idle: 无人时的帧率
+            fps_active: 有人时的帧率
+            person_timeout: 多少秒没检测到人后切换到低帧率
         """
         self.api_client = api_client
         self.model_yaml = model_yaml
         self.model_weights = model_weights
         self.thermal_model_yaml = thermal_model_yaml
         self.thermal_model_weights = thermal_model_weights
-        self.device = device
+        self.devices = devices if devices else ['cuda:0']
         self.target_size = target_size
         self.process_fps = process_fps
         self.tracker = tracker
         self.log_dir = logdir
         self.use_model_server = use_model_server
 
-        # 进程字典: {camera_key: {'process': Process, 'config_queue': Queue, 'config': Dict}}
+        # 动态帧率配置
+        self.enable_adaptive_fps = enable_adaptive_fps
+        self.fps_idle = fps_idle
+        self.fps_active = fps_active
+        self.person_timeout = person_timeout
+
+        # 进程字典: {camera_key: {'process': Process, 'config_queue': Queue, 'config': Dict, 'device': str}}
         self.processes = {}
+
+        # GPU分配计数器（用于轮询分配）
+        self.device_counter = 0
 
         # 模型服务器（仅在use_model_server=True时使用）
         self.model_server = None
@@ -97,6 +112,16 @@ class ProcessManager:
 
         self.logger = logging.getLogger(__name__)
 
+        # 日志输出GPU配置
+        self.logger.info(f"使用 {len(self.devices)} 个GPU设备: {self.devices}")
+
+        # 日志输出动态帧率配置
+        if self.enable_adaptive_fps:
+            self.logger.info(f"动态帧率已启用（仅对绊线入侵规则生效）")
+            self.logger.info(f"  空闲帧率: {self.fps_idle}fps")
+            self.logger.info(f"  活跃帧率: {self.fps_active}fps")
+            self.logger.info(f"  人员超时: {self.person_timeout}秒")
+
         # 条件性启动模型服务器
         if self.use_model_server:
             self._start_model_server()
@@ -104,18 +129,28 @@ class ProcessManager:
             self.logger.info("使用多进程独立模型模式（每个进程加载独立模型）")
             self.logger.info("  优点：推理并行，延迟低")
             self.logger.info("  缺点：GPU显存占用大（每路约1-2GB）")
+            self.logger.info(f"  进程将在 {len(self.devices)} 个GPU上平均分配")
 
     def _start_model_server(self):
         """启动集中式模型服务器"""
         self.logger.info("正在启动集中式模型服务器（双模型）...")
         self.logger.info(f"  这将大幅节省GPU显存（每路节省 ~1-2GB）")
 
+        # ModelServer模式：使用第一个GPU设备
+        # 注意：ModelServer是为了节省显存而设计的串行推理，不适合多GPU并行
+        # 如果需要多GPU并行推理，请使用独立模型模式（use_model_server=False）
+        selected_device = self.devices[0]
+
+        if len(self.devices) > 1:
+            self.logger.warning(f"⚠ ModelServer模式不支持多GPU并行，将只使用第一个GPU: {selected_device}")
+            self.logger.warning(f"⚠ 如需多GPU并行推理以降低延迟，请使用独立模型模式（--use-model-server 不设置）")
+
         self.model_server = ModelServer(
             model_yaml=self.model_yaml,
             model_weights=self.model_weights,
             thermal_model_yaml=self.thermal_model_yaml,
             thermal_model_weights=self.thermal_model_weights,
-            device=self.device,
+            device=selected_device,
             tracker=self.tracker
         )
         self.model_server.start()
@@ -124,7 +159,13 @@ class ProcessManager:
         self.request_queue = self.model_server.request_queue
         self.response_queues = self.model_server.response_queues
 
-        self.logger.info("✓ 模型服务器已启动（双模型：可见光+热成像）")
+        self.logger.info(f"✓ 模型服务器已启动（双模型：可见光+热成像，GPU: {selected_device}）")
+
+    def _get_next_device(self):
+        """获取下一个GPU设备（轮询分配）"""
+        device = self.devices[self.device_counter % len(self.devices)]
+        self.device_counter += 1
+        return device
 
     def start_process(self, camera_config: Dict):
         """启动单个摄像头进程"""
@@ -150,7 +191,11 @@ class ProcessManager:
             selected_model_weights = self.model_weights
             model_type_str = "可见光模型"
 
+        # 分配GPU设备（轮询）
+        assigned_device = self._get_next_device()
+
         self.logger.info(f"[{camera_key}] 通道类型: {'热成像' if user_type == '1' else '可见光'} (userType={user_type})，使用{model_type_str}")
+        self.logger.info(f"[{camera_key}] 分配GPU: {assigned_device}")
 
         # 根据模式准备参数
         if self.use_model_server:
@@ -158,26 +203,28 @@ class ProcessManager:
             if camera_key not in self.response_queues:
                 self.response_queues[camera_key] = self.model_server.manager.Queue()
 
-            # 创建进程
+            # 创建进程（使用分配的设备）
             process = Process(
                 target=camera_worker,
                 args=(camera_config, selected_model_yaml, selected_model_weights,
-                     self.device, self.target_size, self.process_fps,
+                     assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
                      config_queue, self.tracker, self.log_dir,
-                     True, self.request_queue, self.response_queues),
+                     True, self.request_queue, self.response_queues,
+                     self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout),
                 daemon=True,
                 name=f"Camera-{camera_key}"
             )
         else:
-            # 独立模型模式：每个进程加载独立模型
+            # 独立模型模式：每个进程加载独立模型（使用分配的设备）
             process = Process(
                 target=camera_worker,
                 args=(camera_config, selected_model_yaml, selected_model_weights,
-                     self.device, self.target_size, self.process_fps,
+                     assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
                      config_queue, self.tracker, self.log_dir,
-                     False, None, None),
+                     False, None, None,
+                     self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout),
                 daemon=True,
                 name=f"Camera-{camera_key}"
             )
@@ -187,7 +234,8 @@ class ProcessManager:
         self.processes[camera_key] = {
             'process': process,
             'config_queue': config_queue,
-            'config': camera_config
+            'config': camera_config,
+            'device': assigned_device
         }
 
         self.logger.info(f"✓ 启动进程: {camera_config['device_name']}/{camera_config['channel_name']} "
@@ -255,7 +303,9 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
                  api_base_url: str, api_token: str,
                  config_queue: Queue, tracker: str, log_dir: Path,
                  use_model_server: bool = False,
-                 request_queue=None, response_queues=None):
+                 request_queue=None, response_queues=None,
+                 enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
+                 fps_active: float = 5.0, person_timeout: int = 5):
     """摄像头进程工作函数（支持两种模式）"""
     log_file = log_dir / f"unified_detector_{datetime.now().strftime('%Y%m%d')}.log"
 
@@ -304,7 +354,11 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
         api_token=api_token,
         config_queue=config_queue,
         tracker=tracker,
-        model_client=model_client
+        model_client=model_client,
+        enable_adaptive_fps=enable_adaptive_fps,
+        fps_idle=fps_idle,
+        fps_active=fps_active,
+        person_timeout=person_timeout
     )
     processor.start()
 
@@ -338,8 +392,8 @@ def main():
                        default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
                        help='热成像模型权重文件')
 
-    parser.add_argument('--device', type=str, default='cuda:0',
-                       help='设备 (cuda:0 或 cpu)')
+    parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0'],
+                       help='GPU设备列表 (例如: cuda:0 cuda:1，支持多GPU平均分配进程)')
 
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
@@ -353,6 +407,16 @@ def main():
     # 性能优化
     parser.add_argument('--use-model-server', action='store_true', default=False,
                        help='使用集中式模型服务器（节省GPU显存，但推理为串行，延迟较高）')
+
+    # 动态帧率（仅对绊线入侵规则生效）
+    parser.add_argument('--enable-adaptive-fps', action='store_true', default=False,
+                       help='启用自适应帧率（仅对启用绊线入侵检测的进程生效）')
+    parser.add_argument('--fps-idle', type=float, default=1.0,
+                       help='无人时的帧率（默认1.0fps）')
+    parser.add_argument('--fps-active', type=float, default=5.0,
+                       help='有人时的帧率（默认5.0fps）')
+    parser.add_argument('--person-timeout', type=int, default=5,
+                       help='多少秒没检测到人后切换到低帧率（默认5秒）')
 
     # 配置更新
     parser.add_argument('--config-update-interval', type=int, default=30,
@@ -404,12 +468,16 @@ def main():
         model_weights=args.weights,
         thermal_model_yaml=args.thermal_model_yaml,
         thermal_model_weights=args.thermal_weights,
-        device=args.device,
+        devices=args.devices,
         target_size=args.target_size,
         process_fps=args.process_fps,
         tracker=args.tracker,
         logdir=log_dir,
-        use_model_server=args.use_model_server
+        use_model_server=args.use_model_server,
+        enable_adaptive_fps=args.enable_adaptive_fps,
+        fps_idle=args.fps_idle,
+        fps_active=args.fps_active,
+        person_timeout=args.person_timeout
     )
 
     # 启动所有摄像头进程

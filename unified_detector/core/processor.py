@@ -34,7 +34,9 @@ class CameraProcessor:
                  device: str, target_size: int, process_fps: float,
                  api_base_url: str, api_token: str,
                  config_queue: Queue, tracker: str = 'bytetrack',
-                 model_client=None):
+                 model_client=None,
+                 enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
+                 fps_active: float = 5.0, person_timeout: int = 5):
         """
         Args:
             camera_config: 摄像头配置（包含三个算法规则）
@@ -48,6 +50,10 @@ class CameraProcessor:
             config_queue: 配置更新队列
             tracker: 跟踪器类型（如果使用model_client则为None）
             model_client: 轻量级模型客户端（可选，用于多进程共享模型）
+            enable_adaptive_fps: 启用自适应帧率
+            fps_idle: 无人时的帧率
+            fps_active: 有人时的帧率
+            person_timeout: 多少秒没检测到人后切换到低帧率
         """
         self.camera_config = camera_config
         self.camera_key = camera_config['camera_key']
@@ -65,6 +71,17 @@ class CameraProcessor:
         self.api_base_url = api_base_url
         self.api_token = api_token
         self.config_queue = config_queue
+
+        # 动态帧率配置
+        self.enable_adaptive_fps = enable_adaptive_fps
+        self.fps_idle = fps_idle
+        self.fps_active = fps_active
+        self.person_timeout = person_timeout
+        self.has_tripwire = False  # 是否有绊线规则（在_init_rules后判断）
+
+        # 动态帧率状态
+        self.current_fps = process_fps  # 当前使用的帧率（初始为默认值）
+        self.last_person_detected_time = 0  # 上次检测到人的时间
 
         # 运行状态
         self.running = False
@@ -162,6 +179,16 @@ class CameraProcessor:
             logger.info(f"[{self.camera_key}] 初始化规则引擎...")
             self._init_rules()
 
+            # 判断是否启用动态帧率
+            if self.enable_adaptive_fps:
+                self.has_tripwire = 'tripwire_intrusion' in self.rules
+                if self.has_tripwire:
+                    self.current_fps = self.fps_idle  # 启动时使用低帧率
+                    logger.info(f"[{self.camera_key}] 启用动态帧率 "
+                               f"(空闲:{self.fps_idle}fps, 活跃:{self.fps_active}fps, 超时:{self.person_timeout}s)")
+                else:
+                    logger.info(f"[{self.camera_key}] 未启用绊线规则，不使用动态帧率")
+
             # 7. 计算抽帧间隔
             process_interval = max(1, int(round(float(fps) / float(self.process_fps))))
             logger.info(f"[{self.camera_key}] 抽帧设置: 每 {process_interval} 帧处理一次")
@@ -227,7 +254,7 @@ class CameraProcessor:
                 # 3. 基于时间戳的抽帧检测（防止延迟累积）
                 if current_time >= next_process_time:
                     # 更新下次处理时间（基于当前时间，防止累积）
-                    next_process_time = current_time + (1.0 / self.process_fps)
+                    next_process_time = current_time + (1.0 / self.current_fps)
 
                     # 只有需要处理时才retrieve（解码帧）
                     ret, frame = self.cap.retrieve()
@@ -262,6 +289,28 @@ class CameraProcessor:
                         iou_threshold=0.7,
                         target_size=self.target_size
                     )
+
+                    # 动态帧率：检查是否检测到人（仅对启用绊线规则的进程生效）
+                    if self.has_tripwire and self.enable_adaptive_fps:
+                        has_person = any(d['cls'] == 0 for d in detections)
+
+                        if has_person:
+                            self.last_person_detected_time = current_time
+
+                        # 根据时间窗口决定帧率
+                        time_since_person = current_time - self.last_person_detected_time
+
+                        if time_since_person < self.person_timeout:
+                            new_fps = self.fps_active
+                        else:
+                            new_fps = self.fps_idle
+
+                        # 如果帧率变化，记录日志
+                        if new_fps != self.current_fps:
+                            logger.info(f"[{self.camera_key}] 帧率切换: "
+                                       f"{self.current_fps}fps → {new_fps}fps "
+                                       f"(最后检测到人: {time_since_person:.1f}秒前)")
+                            self.current_fps = new_fps
 
                     # # 6. 可视化检测结果（调试用）
                     # vis_frame = frame.copy()
@@ -354,6 +403,7 @@ class CameraProcessor:
                         mem_warning = " ⚠️"
 
                     logger.info(f"[{self.camera_key}] 帧: {self.frame_count} | "
+                               f"当前fps: {self.current_fps:.1f} | "
                                f"推理: {avg_inference:.1f}ms | "
                                f"规则: {avg_rules:.1f}ms | "
                                f"总计: {avg_total:.1f}ms{interval_info} | "
@@ -467,6 +517,21 @@ class CameraProcessor:
                     logger.error(f"[{self.camera_key}] 创建规则失败 [{rule_type}]: {e}", exc_info=True)
 
         self.rules = new_rules
+
+        # 更新动态帧率状态
+        if self.enable_adaptive_fps:
+            old_has_tripwire = self.has_tripwire
+            self.has_tripwire = 'tripwire_intrusion' in self.rules
+
+            if old_has_tripwire != self.has_tripwire:
+                if self.has_tripwire:
+                    self.current_fps = self.fps_idle
+                    self.last_person_detected_time = 0
+                    logger.info(f"[{self.camera_key}] 启用动态帧率 "
+                               f"(空闲:{self.fps_idle}fps, 活跃:{self.fps_active}fps)")
+                else:
+                    self.current_fps = self.process_fps
+                    logger.info(f"[{self.camera_key}] 禁用动态帧率，恢复固定帧率 {self.process_fps}fps")
 
     def stop(self):
         """停止处理"""
