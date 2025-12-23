@@ -1,18 +1,18 @@
 {
   "tripwires": [
     {
-      "id": "34020000001180000001_34020000001310000001_line_0",
+      "id": "34020000001180000001_34020000001310000001_copy06_line_0",
       "points": [
         [
-          2164,
-          759
+          2037,
+          849
         ],
         [
-          1764,
-          1492
+          1204,
+          1484
         ]
       ],
-      "direction": "left-to-right",
+      "direction": "right-to-left",
       "enabled": true,
       "alert_cooldown": 2.0,
       "color": [

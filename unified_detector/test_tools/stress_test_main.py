@@ -151,9 +151,9 @@ def main():
                        help='GPU设备列表 (例如: cuda:0 cuda:1，进程将轮询分配到各GPU)')
 
     # 检测配置
-    parser.add_argument('--target-size', type=int, default=640,
+    parser.add_argument('--target-size', type=int, default=800,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=5,
+    parser.add_argument('--process-fps', type=float, default=1,
                        help='每秒处理帧数')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        help='跟踪器类型')

@@ -130,26 +130,41 @@ class ProcessManager:
             self.logger.info(f"  活跃帧率: {self.fps_active}fps")
             self.logger.info(f"  人员超时: {self.person_timeout}秒")
 
-        # 条件性启动模型服务器
-        if self.use_model_server:
-            self._start_model_server()
-        else:
+        # ModelServer模式下，延迟启动（需要先知道camera配置）
+        if not self.use_model_server:
             self.logger.info("使用多进程独立模型模式（每个进程加载独立模型）")
             self.logger.info("  优点：推理并行，延迟低")
             self.logger.info("  缺点：GPU显存占用大（每路约1-2GB）")
             self.logger.info(f"  进程将在 {len(self.devices)} 个GPU上平均分配")
 
-    def _start_model_server(self):
-        """启动集中式模型服务器（支持多GPU）"""
-        self.logger.info(f"正在启动集中式模型服务器（双模型）...")
+    def start_model_servers_with_cameras(self, camera_configs: Dict, max_cameras_per_gpu: int = 50):
+        """
+        启动集中式模型服务器（预留槽位方案，Python 3.8兼容）
+
+        Args:
+            camera_configs: 初始摄像头配置字典
+            max_cameras_per_gpu: 每个GPU支持的最大摄像头数（预留槽位数）
+        """
+        self.logger.info(f"正在启动集中式模型服务器（双模型，预留槽位方案）...")
         self.logger.info(f"  GPU数量: {len(self.devices)}")
-        self.logger.info(f"  每个GPU将启动一个独立的ModelServer")
-        self.logger.info(f"  进程将轮询分配到不同的ModelServer")
-        self.logger.info(f"  这将大幅节省GPU显存（每路节省 ~1-2GB）")
+        self.logger.info(f"  初始摄像头: {len(camera_configs)} 个")
+        self.logger.info(f"  每GPU槽位: {max_cameras_per_gpu} 个")
+
+        # 先规划每个GPU需要处理哪些camera（轮询分配）
+        camera_assignments = {}  # {gpu_idx: [camera_keys]}
+        for gpu_idx in range(len(self.devices)):
+            camera_assignments[gpu_idx] = []
+
+        for idx, camera_key in enumerate(camera_configs.keys()):
+            gpu_idx = idx % len(self.devices)
+            camera_assignments[gpu_idx].append(camera_key)
 
         # 为每个GPU启动一个ModelServer
         for gpu_idx, device in enumerate(self.devices):
+            assigned_cameras = camera_assignments[gpu_idx]
             self.logger.info(f"\n  启动GPU{gpu_idx}的ModelServer ({device})...")
+            self.logger.info(f"    初始分配: {len(assigned_cameras)} 个")
+            self.logger.info(f"    预留槽位: {max_cameras_per_gpu} 个")
 
             model_server = ModelServer(
                 model_yaml=self.model_yaml,
@@ -159,18 +174,35 @@ class ProcessManager:
                 device=device,
                 tracker=self.tracker
             )
-            # 启动时不传camera_keys，后续在start_process时创建响应队列
-            model_server.start()
+            # 关键：传递camera_keys和max_cameras
+            model_server.start(camera_keys=assigned_cameras, max_cameras=max_cameras_per_gpu)
+
+            # 注册已知camera到子进程（通过注册队列）
+            for camera_key in assigned_cameras:
+                queue_index = model_server.camera_to_index[camera_key]
+                # 发送注册请求到子进程
+                model_server.registration_queue.put({
+                    'camera_key': camera_key,
+                    'queue_index': queue_index
+                })
+                # 等待确认
+                ack = model_server.registration_ack_queue.get(timeout=2.0)
+                if ack['status'] != 'success':
+                    self.logger.error(f"    预注册失败: {camera_key}")
 
             self.model_servers.append(model_server)
             self.request_queues.append(model_server.request_queue)
-            self.response_queues_list.append(model_server.response_queues)
+            # 保存映射表和队列（用于传递给camera进程）
+            self.response_queues_list.append({
+                'queues': model_server.response_queues_by_index,
+                'mapping': model_server.camera_to_index
+            })
 
-            self.logger.info(f"  ✓ GPU{gpu_idx} ModelServer已启动")
+            self.logger.info(f"  ✓ GPU{gpu_idx} ModelServer已启动（{len(assigned_cameras)}/{max_cameras_per_gpu}）")
 
-        self.logger.info(f"\n✓ 所有ModelServer已启动（{len(self.model_servers)} 个GPU，双模型：可见光+热成像）")
-        self.logger.info(f"  预计总显存占用: {len(self.devices) * 1.0:.1f}GB（每GPU约1GB）")
-        self.logger.info(f"  进程分配策略: 轮询到{len(self.devices)}个GPU")
+        self.logger.info(f"\n✓ 所有ModelServer已启动（{len(self.model_servers)} 个GPU）")
+        self.logger.info(f"  预计总显存占用: {len(self.devices) * 1.0:.1f}GB")
+        self.logger.info(f"  总槽位容量: {len(self.devices) * max_cameras_per_gpu} 个")
 
     def _get_next_device(self):
         """获取下一个GPU设备（轮询分配）"""
@@ -179,7 +211,11 @@ class ProcessManager:
         return device
 
     def start_process(self, camera_config: Dict):
-        """启动单个摄像头进程"""
+        """
+        启动单个摄像头进程
+
+        注意：在ModelServer模式下，如果响应队列不存在会自动创建（支持热更新）
+        """
         camera_key = camera_config['camera_key']
 
         if camera_key in self.processes:
@@ -211,23 +247,29 @@ class ProcessManager:
             self.device_counter += 1
 
             request_queue = self.request_queues[gpu_idx]
-            response_queues = self.response_queues_list[gpu_idx]
+            response_data = self.response_queues_list[gpu_idx]
+            response_queues_by_index = response_data['queues']
+            camera_to_index = response_data['mapping']
             assigned_device = self.devices[gpu_idx]
 
-            # 预先创建响应队列
-            if camera_key not in response_queues:
-                response_queues[camera_key] = self.model_servers[gpu_idx].manager.Queue()
+            # 动态注册：如果响应队列不存在，通过register_client创建（支持热更新）
+            if camera_key not in camera_to_index:
+                self.logger.info(f"[{camera_key}] 动态注册到ModelServer GPU{gpu_idx}")
+                success = self.model_servers[gpu_idx].register_client(camera_key)
+                if not success:
+                    self.logger.error(f"[{camera_key}] 注册失败，跳过启动")
+                    return
 
             self.logger.info(f"[{camera_key}] 分配到ModelServer: GPU{gpu_idx} ({assigned_device})")
 
-            # 创建进程
+            # 创建进程（传递response_queues_by_index和camera_to_index）
             process = Process(
                 target=camera_worker,
                 args=(camera_config, selected_model_yaml, selected_model_weights,
                      assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
                      config_queue, self.tracker, self.log_dir,
-                     True, request_queue, response_queues,
+                     True, request_queue, response_queues_by_index, camera_to_index,
                      self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout,
                      self.tripwire_first_alarm_time, self.tripwire_tolerance_time),
                 daemon=True,
@@ -245,7 +287,7 @@ class ProcessManager:
                      assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
                      config_queue, self.tracker, self.log_dir,
-                     False, None, None,
+                     False, None, None, None,
                      self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout,
                      self.tripwire_first_alarm_time, self.tripwire_tolerance_time),
                 daemon=True,
@@ -277,6 +319,15 @@ class ProcessManager:
         if proc_info['process'].is_alive():
             proc_info['process'].kill()
             self.logger.warning(f"强制终止进程: {camera_key}")
+
+        # 如果使用ModelServer模式，清理映射表（预留槽位不删除，只删除映射）
+        if self.use_model_server and self.response_queues_list:
+            for response_data in self.response_queues_list:
+                camera_to_index = response_data['mapping']
+                if camera_key in camera_to_index:
+                    del camera_to_index[camera_key]
+                    self.logger.debug(f"清理映射表: {camera_key}")
+                    break
 
         del self.processes[camera_key]
 
@@ -329,7 +380,7 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
                  api_base_url: str, api_token: str,
                  config_queue: Queue, tracker: str, log_dir: Path,
                  use_model_server: bool = False,
-                 request_queue=None, response_queues=None,
+                 request_queue=None, response_queues_by_index=None, camera_to_index=None,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
                  fps_active: float = 5.0, person_timeout: int = 5,
                  tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0):
@@ -350,7 +401,7 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
     model_client = None
 
     if use_model_server:
-        # ModelServer模式：创建轻量级客户端
+        # ModelServer模式：创建轻量级客户端（预留槽位方案）
         from core.model_server import LightweightModelClient
 
         # 根据user_type确定模型类型
@@ -360,7 +411,8 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
         model_client = LightweightModelClient(
             camera_config['camera_key'],
             request_queue,
-            response_queues,
+            response_queues_by_index,
+            camera_to_index,
             model_type=model_type
         )
         # 模型参数设为None
@@ -415,17 +467,17 @@ def main():
 
     # 模型配置 - 热成像模型
     parser.add_argument('--thermal-model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11x.yaml",
+                       default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='热成像模型配置YAML文件')
     parser.add_argument('--thermal-weights', type=str,
-                       default='data/LLVIP_IF-yolo11x-e300-16-pretrained.pt',
+                       default='data/LLVIP_IF-yolo11m-e300-16-pretrained.pt',
                        help='热成像模型权重文件')
 
     parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0', 'cuda:1'],
                        help='GPU设备列表 (例如: cuda:0 cuda:1，支持多GPU平均分配进程)')
 
     # 检测配置
-    parser.add_argument('--target-size', type=int, default=640,
+    parser.add_argument('--target-size', type=int, default=800,
                        help='YOLO检测目标尺寸')
     parser.add_argument('--process-fps', type=float, default=1.0,
                        help='每秒处理帧数（抽帧）')
@@ -434,7 +486,7 @@ def main():
                        help='跟踪器类型')
 
     # 性能优化
-    parser.add_argument('--use-model-server', action='store_true', default=False,
+    parser.add_argument('--use-model-server', action='store_true', default=True,
                        help='使用集中式模型服务器（节省GPU显存，但推理为串行，延迟较高）')
 
     # 动态帧率（仅对绊线入侵规则生效）
@@ -448,9 +500,9 @@ def main():
                        help='多少秒没检测到人后切换到低帧率（默认5秒）')
 
     # 绊线入侵首次报警时间（避免启动时误报）
-    parser.add_argument('--tripwire-first-alarm-time', type=float, default=5.0,
+    parser.add_argument('--tripwire-first-alarm-time', type=float, default=2.0,
                        help='绊线入侵首次报警时间（秒），目标持续在危险侧多久后才报警，避免启动时误报（默认10秒）')
-    parser.add_argument('--tripwire-tolerance-time', type=float, default=3.0,
+    parser.add_argument('--tripwire-tolerance-time', type=float, default=5.0,
                        help='绊线入侵容忍时间（秒），目标短暂消失后多久重置状态（默认3秒）')
 
     # 配置更新
@@ -517,7 +569,13 @@ def main():
         tripwire_tolerance_time=args.tripwire_tolerance_time
     )
 
+    # 4.5. 如果使用ModelServer模式，在启动进程前先启动ModelServer（需要预知camera配置）
+    if args.use_model_server:
+        logger.info("\n[4.5/5] 启动ModelServer（预先分配响应队列）...")
+        process_manager.start_model_servers_with_cameras(current_configs)
+
     # 启动所有摄像头进程
+    logger.info("\n[5/5] 启动所有摄像头进程...")
     for camera_key, camera_config in current_configs.items():
         process_manager.start_process(camera_config)
 

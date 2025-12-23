@@ -53,31 +53,49 @@ class ModelServer:
         self.detector_visible = None  # 可见光模型
         self.detector_thermal = None  # 热成像模型
 
-    def start(self, camera_keys=None):
+    def start(self, camera_keys=None, max_cameras=50):
         """
-        启动模型服务器进程
+        启动模型服务器进程（Python 3.8兼容：预留槽位方案）
 
         Args:
-            camera_keys: 需要预先创建响应队列的camera_key列表
+            camera_keys: 需要预先分配的camera_key列表（可选）
+            max_cameras: 最大支持的摄像头数量（预留槽位数）
         """
         self.manager = Manager()
         self.request_queue = self.manager.Queue(maxsize=100)
 
-        # Python 3.8 bug: Manager.dict()不能存储Manager.Queue()
-        # 解决方案：预先创建所有Queue，存储在普通dict中，直接传递给worker
-        response_queues_dict = {}
-        if camera_keys:
-            logger.info(f"为 {len(camera_keys)} 个camera预先创建响应队列...")
-            for camera_key in camera_keys:
-                response_queues_dict[camera_key] = self.manager.Queue()
-            logger.info(f"✓ 已创建 {len(camera_keys)} 个响应队列")
+        # 注册队列：用于动态添加新摄像头（只传递camera_key和index，不传递Queue对象）
+        self.registration_queue = self.manager.Queue()
+        self.registration_ack_queue = self.manager.Queue()
 
-        # 使用普通dict而不是Manager.dict()
-        self.response_queues = response_queues_dict
+        # 预留槽位方案：预先创建固定数量的响应队列（用索引0~max_cameras-1）
+        logger.info(f"预留 {max_cameras} 个响应队列槽位（支持热更新）...")
+        response_queues_by_index = {}
+        for i in range(max_cameras):
+            response_queues_by_index[i] = self.manager.Queue()
+
+        # 映射表：camera_key → queue_index（主进程维护）
+        self.camera_to_index = {}
+        self.next_available_index = 0
+
+        # 为已知camera分配槽位
+        if camera_keys:
+            logger.info(f"为 {len(camera_keys)} 个camera预先分配槽位...")
+            for camera_key in camera_keys:
+                if self.next_available_index < max_cameras:
+                    self.camera_to_index[camera_key] = self.next_available_index
+                    self.next_available_index += 1
+                else:
+                    logger.warning(f"槽位已满，无法分配: {camera_key}")
+            logger.info(f"✓ 已分配 {len(camera_keys)} 个槽位")
+
+        # 保存队列引用（主进程通过camera_key访问）
+        self.response_queues_by_index = response_queues_by_index
 
         self.server_process = Process(
             target=self._server_loop,
-            args=(self.request_queue, response_queues_dict,
+            args=(self.request_queue, self.registration_queue, self.registration_ack_queue,
+                  response_queues_by_index,
                   self.model_yaml, self.model_weights,
                   self.thermal_model_yaml, self.thermal_model_weights,
                   self.device, self.tracker, 0),
@@ -86,10 +104,7 @@ class ModelServer:
         )
         self.server_process.start()
 
-        if camera_keys:
-            logger.info(f"✓ 模型服务器已启动（双模型：可见光+热成像，{len(camera_keys)} 个camera）")
-        else:
-            logger.info("✓ 模型服务器已启动（双模型：可见光+热成像）")
+        logger.info(f"✓ 模型服务器已启动（双模型，槽位: {len(camera_keys) if camera_keys else 0}/{max_cameras}）")
 
         # 等待模型加载完成
         time.sleep(8)  # 双模型需要更长的加载时间
@@ -101,20 +116,50 @@ class ModelServer:
             self.server_process.join(timeout=5)
             logger.info("✓ 模型服务器已停止")
 
-    def register_client(self, client_id: str) -> Queue:
+    def register_client(self, client_id: str, timeout: float = 2.0) -> bool:
         """
-        注册客户端
+        动态注册客户端（预留槽位方案，Python 3.8兼容）
 
         Args:
             client_id: 客户端标识
+            timeout: 等待注册确认的超时时间（秒）
 
         Returns:
-            response_queue: 该客户端的响应队列
+            是否注册成功
         """
-        response_queue = self.manager.Queue()
-        self.response_queues[client_id] = response_queue
-        logger.info(f"✓ 客户端已注册: {client_id}")
-        return response_queue
+        # 检查是否已注册
+        if client_id in self.camera_to_index:
+            logger.warning(f"客户端已注册: {client_id}")
+            return True
+
+        # 分配一个空闲槽位
+        if self.next_available_index >= len(self.response_queues_by_index):
+            logger.error(f"✗ 槽位已满，无法注册: {client_id}")
+            return False
+
+        queue_index = self.next_available_index
+        self.next_available_index += 1
+
+        # 通过注册队列发送注册请求（只传递camera_key和index，不传递Queue对象）
+        self.registration_queue.put({
+            'camera_key': client_id,
+            'queue_index': queue_index
+        })
+
+        # 等待子进程确认注册完成
+        try:
+            ack = self.registration_ack_queue.get(timeout=timeout)
+            if ack['camera_key'] == client_id and ack['status'] == 'success':
+                # 保存映射到主进程
+                self.camera_to_index[client_id] = queue_index
+                logger.info(f"✓ 客户端已注册: {client_id} → 槽位{queue_index}")
+                return True
+            else:
+                logger.error(f"✗ 客户端注册失败: {client_id}")
+                return False
+        except Empty:
+            logger.error(f"✗ 客户端注册超时: {client_id}")
+            return False
 
     def infer(self, client_id: str, frame: np.ndarray,
               conf_threshold: float = 0.25,
@@ -166,11 +211,12 @@ class ModelServer:
             return None
 
     @staticmethod
-    def _server_loop(request_queue: Queue, response_queues: Dict,
+    def _server_loop(request_queue: Queue, registration_queue: Queue, registration_ack_queue: Queue,
+                     response_queues_by_index: Dict,
                      model_yaml: str, model_weights: str,
                      thermal_model_yaml: str, thermal_model_weights: str,
                      device: str, tracker: str, gpu_idx: int = 0):
-        """服务器主循环（在独立进程中运行）"""
+        """服务器主循环（预留槽位方案）"""
         # 配置日志
         logging.basicConfig(
             level=logging.INFO,
@@ -180,7 +226,10 @@ class ModelServer:
 
         logger = logging.getLogger(__name__)
         logger.info(f"模型服务器进程启动（GPU{gpu_idx}: {device}）...")
-        logger.info(f"已接收 {len(response_queues)} 个响应队列")
+        logger.info(f"已接收 {len(response_queues_by_index)} 个预留的响应队列槽位")
+
+        # 维护camera_key → queue_index的映射表（子进程）
+        camera_key_to_index = {}
 
         # 加载两个模型
         try:
@@ -207,11 +256,30 @@ class ModelServer:
         }
 
         # 主循环
-        logger.info("开始监听推理请求...")
+        logger.info("开始监听推理请求和注册请求...")
 
         while True:
             try:
-                # 获取请求（阻塞，超时1秒）
+                # 1. 先处理注册队列（非阻塞）
+                try:
+                    while True:
+                        reg_msg = registration_queue.get_nowait()
+                        camera_key = reg_msg['camera_key']
+                        queue_index = reg_msg['queue_index']
+
+                        # 建立映射关系（不需要传递Queue对象）
+                        camera_key_to_index[camera_key] = queue_index
+                        logger.info(f"✓ 动态注册camera: {camera_key} → 槽位{queue_index}")
+
+                        # 发送确认消息
+                        registration_ack_queue.put({
+                            'camera_key': camera_key,
+                            'status': 'success'
+                        })
+                except Empty:
+                    pass  # 注册队列为空，继续处理推理请求
+
+                # 2. 再获取推理请求（阻塞，超时1秒）
                 try:
                     request = request_queue.get(timeout=1.0)
                 except Empty:
@@ -239,15 +307,16 @@ class ModelServer:
                         frame, conf_threshold, iou_threshold, target_size
                     )
 
-                    # 发送响应
+                    # 发送响应（通过映射表查找队列）
                     response = {
                         'client_id': client_id,
                         'detections': detections,
                         'timestamp': time.time()
                     }
 
-                    response_queue = response_queues.get(client_id)
-                    if response_queue:
+                    queue_index = camera_key_to_index.get(client_id)
+                    if queue_index is not None:
+                        response_queue = response_queues_by_index[queue_index]
                         try:
                             response_queue.put_nowait(response)
                             stats['successful'] += 1
@@ -255,7 +324,7 @@ class ModelServer:
                             logger.warning(f"[{client_id}] 响应队列已满")
                             stats['failed'] += 1
                     else:
-                        logger.warning(f"[{client_id}] 客户端未找到（未预先分配）")
+                        logger.warning(f"[{client_id}] 客户端未注册")
                         stats['failed'] += 1
 
                 except Exception as e:
@@ -276,19 +345,21 @@ class ModelServer:
 
 
 class LightweightModelClient:
-    """轻量级模型客户端（用于子进程）"""
+    """轻量级模型客户端（预留槽位方案）"""
 
-    def __init__(self, client_id: str, request_queue, response_queues, model_type: str = 'visible'):
+    def __init__(self, client_id: str, request_queue, response_queues_by_index, camera_to_index, model_type: str = 'visible'):
         """
         Args:
             client_id: 客户端标识（camera_key）
             request_queue: 共享的请求队列
-            response_queues: 共享的响应队列字典(Manager.dict())
+            response_queues_by_index: 按索引存储的响应队列字典
+            camera_to_index: camera_key → queue_index 的映射表
             model_type: 模型类型 ('visible'=可见光, 'thermal'=热成像)
         """
         self.client_id = client_id
         self.request_queue = request_queue
-        self.response_queues = response_queues
+        self.response_queues_by_index = response_queues_by_index
+        self.camera_to_index = camera_to_index
         self.model_type = model_type
 
         logger.info(f"[{client_id}] 轻量级客户端已创建 (模型类型: {'热成像' if model_type == 'thermal' else '可见光'})")
@@ -329,11 +400,13 @@ class LightweightModelClient:
             logger.error(f"[{self.client_id}] 请求队列已满，丢弃该帧")
             return []
 
-        # 等待响应（从响应队列字典中获取）
-        response_queue = self.response_queues.get(self.client_id)
-        if not response_queue:
-            logger.error(f"[{self.client_id}] 响应队列未找到")
+        # 等待响应（通过映射表查找响应队列）
+        queue_index = self.camera_to_index.get(self.client_id)
+        if queue_index is None:
+            logger.error(f"[{self.client_id}] 响应队列未注册")
             return []
+
+        response_queue = self.response_queues_by_index[queue_index]
 
         try:
             response = response_queue.get(timeout=timeout)
