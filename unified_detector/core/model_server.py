@@ -33,7 +33,7 @@ class ModelServer:
             model_weights: 可见光模型权重文件
             thermal_model_yaml: 热成像模型配置文件
             thermal_model_weights: 热成像模型权重文件
-            device: 设备(cuda:0/cpu)
+            device: 设备(cuda:0/cp)
             tracker: 跟踪器类型
         """
         self.model_yaml = model_yaml
@@ -53,23 +53,43 @@ class ModelServer:
         self.detector_visible = None  # 可见光模型
         self.detector_thermal = None  # 热成像模型
 
-    def start(self):
-        """启动模型服务器进程"""
+    def start(self, camera_keys=None):
+        """
+        启动模型服务器进程
+
+        Args:
+            camera_keys: 需要预先创建响应队列的camera_key列表
+        """
         self.manager = Manager()
         self.request_queue = self.manager.Queue(maxsize=100)
-        self.response_queues = self.manager.dict()
+
+        # Python 3.8 bug: Manager.dict()不能存储Manager.Queue()
+        # 解决方案：预先创建所有Queue，存储在普通dict中，直接传递给worker
+        response_queues_dict = {}
+        if camera_keys:
+            logger.info(f"为 {len(camera_keys)} 个camera预先创建响应队列...")
+            for camera_key in camera_keys:
+                response_queues_dict[camera_key] = self.manager.Queue()
+            logger.info(f"✓ 已创建 {len(camera_keys)} 个响应队列")
+
+        # 使用普通dict而不是Manager.dict()
+        self.response_queues = response_queues_dict
 
         self.server_process = Process(
             target=self._server_loop,
-            args=(self.request_queue, self.response_queues,
+            args=(self.request_queue, response_queues_dict,
                   self.model_yaml, self.model_weights,
                   self.thermal_model_yaml, self.thermal_model_weights,
-                  self.device, self.tracker),
+                  self.device, self.tracker, 0),
             daemon=True,
             name="ModelServer"
         )
         self.server_process.start()
-        logger.info("✓ 模型服务器已启动（双模型：可见光+热成像）")
+
+        if camera_keys:
+            logger.info(f"✓ 模型服务器已启动（双模型：可见光+热成像，{len(camera_keys)} 个camera）")
+        else:
+            logger.info("✓ 模型服务器已启动（双模型：可见光+热成像）")
 
         # 等待模型加载完成
         time.sleep(8)  # 双模型需要更长的加载时间
@@ -149,7 +169,7 @@ class ModelServer:
     def _server_loop(request_queue: Queue, response_queues: Dict,
                      model_yaml: str, model_weights: str,
                      thermal_model_yaml: str, thermal_model_weights: str,
-                     device: str, tracker: str):
+                     device: str, tracker: str, gpu_idx: int = 0):
         """服务器主循环（在独立进程中运行）"""
         # 配置日志
         logging.basicConfig(
@@ -159,7 +179,8 @@ class ModelServer:
         )
 
         logger = logging.getLogger(__name__)
-        logger.info("模型服务器进程启动...")
+        logger.info(f"模型服务器进程启动（GPU{gpu_idx}: {device}）...")
+        logger.info(f"已接收 {len(response_queues)} 个响应队列")
 
         # 加载两个模型
         try:
@@ -234,7 +255,7 @@ class ModelServer:
                             logger.warning(f"[{client_id}] 响应队列已满")
                             stats['failed'] += 1
                     else:
-                        logger.warning(f"[{client_id}] 客户端未找到")
+                        logger.warning(f"[{client_id}] 客户端未找到（未预先分配）")
                         stats['failed'] += 1
 
                 except Exception as e:

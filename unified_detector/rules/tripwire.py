@@ -56,6 +56,22 @@ class Track:
 class TripwireRule(RuleEngine):
     """绊线入侵规则"""
 
+    def __init__(self, rule_config: Dict, camera_key: str,
+                 first_alarm_time: float = 10.0, tolerance_time: float = 3.0):
+        """
+        Args:
+            rule_config: 规则配置字典
+            camera_key: 摄像头唯一标识
+            first_alarm_time: 首次报警时间（秒），从main.py参数传入
+            tolerance_time: 容忍时间（秒），从main.py参数传入
+        """
+        # 保存参数供后续使用
+        self._first_alarm_time = first_alarm_time
+        self._tolerance_time = tolerance_time
+
+        # 调用父类初始化
+        super().__init__(rule_config, camera_key)
+
     def _init_rule_specific(self):
         """初始化绊线入侵特定配置"""
         # 绊线特有配置
@@ -63,6 +79,10 @@ class TripwireRule(RuleEngine):
         self.frontend_width = self.rule_config.get('frontend_width', 1920)
         self.frontend_height = self.rule_config.get('frontend_height', 1080)
         self.tripwire_lines = self.rule_config.get('tripwire_arrays', [])  # 转换后的绊线坐标
+
+        # 使用从main.py传入的参数，而不是从rule_config读取
+        self.first_alarm_time = self._first_alarm_time
+        self.tolerance_time = self._tolerance_time
 
         # Track管理
         self.track_history = {}  # {track_id: Track对象}
@@ -74,7 +94,8 @@ class TripwireRule(RuleEngine):
         self._init_tripwire_monitor()
 
         logger.debug(f"[{self.camera_key}] 绊线入侵规则初始化: 绊线数={len(self.tripwire_lines)}, "
-                    f"sensitivity={self.sensitivity:.2f}, direction={self.direction}")
+                    f"sensitivity={self.sensitivity:.2f}, direction={self.direction}, "
+                    f"first_alarm_time={self.first_alarm_time}s, tolerance_time={self.tolerance_time}s")
 
     def _init_tripwire_monitor(self):
         """初始化TripwireMonitor"""
@@ -99,10 +120,12 @@ class TripwireRule(RuleEngine):
         with open(self.temp_config_path, 'w', encoding='utf-8') as f:
             json.dump(temp_config, f, indent=2)
 
-        # 初始化TripwireMonitor（使用全局冷却时间）
+        # 初始化TripwireMonitor（使用全局冷却时间、首次报警时间和容忍时间）
         self.monitor = TripwireMonitor(
             str(self.temp_config_path),
-            global_cooldown=self.repeated_alarm_time
+            global_cooldown=self.repeated_alarm_time,
+            first_alarm_time=self.first_alarm_time,
+            tolerance_time=self.tolerance_time
         )
 
         logger.debug(f"[{self.camera_key}] TripwireMonitor初始化完成")
@@ -229,6 +252,7 @@ class TripwireRule(RuleEngine):
         self.rule_config = new_config
         self.sensitivity = new_config.get('sensitivity', 0.75)
         self.repeated_alarm_time = new_config.get('repeated_alarm_time', 30.0)
+        # first_alarm_time 和 tolerance_time 使用从 main.py 传入的参数，不从配置更新
         self.direction = new_config.get('direction', 'double-direction')
         self.tripwire_lines = new_config.get('tripwire_arrays', [])
         self.device_info = new_config.get('device_info', {})

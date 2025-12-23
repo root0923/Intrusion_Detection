@@ -124,7 +124,7 @@ def main():
     parser = argparse.ArgumentParser(description='20路并发压测工具')
 
     # API配置
-    parser.add_argument('--api-url', type=str, default="http://localhost:9199",
+    parser.add_argument('--api-url', type=str, default="http://10.16.7.79:9199",
                        help='后端API基础URL')
     parser.add_argument('--username', type=str, default='jzsx',
                        help='登录用户名')
@@ -133,10 +133,10 @@ def main():
 
     # 模型配置 - 可见光模型
     parser.add_argument('--model-yaml', type=str,
-                       default="ultralytics/cfg/models/11/yolo11n.yaml",
+                       default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='可见光模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP-yolo11n-e300-16-pretrained-.pt',
+                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
                        help='可见光模型权重文件')
 
     # 模型配置 - 热成像模型
@@ -147,22 +147,22 @@ def main():
                        default='data/LLVIP-yolo11n-e300-16-pretrained-.pt',
                        help='热成像模型权重文件')
 
-    parser.add_argument('--device', type=str, default='cuda:0',
-                       help='设备 (cuda:0 或 cpu)')
+    parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0', 'cuda:1'],
+                       help='GPU设备列表 (例如: cuda:0 cuda:1，进程将轮询分配到各GPU)')
 
     # 检测配置
     parser.add_argument('--target-size', type=int, default=640,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=2.0,
+    parser.add_argument('--process-fps', type=float, default=5,
                        help='每秒处理帧数')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        help='跟踪器类型')
 
     # 性能优化
     parser.add_argument('--use-model-server', action='store_true', default=True,
-                       help='使用集中式模型服务器（节省显存，但推理串行）')
-    parser.add_argument('--gpu-devices', type=str, default='0',
-                       help='GPU设备列表，逗号分隔（如"0,1"表示使用cuda:0和cuda:1）')
+                       help='使用集中式模型服务器（节省显存，支持多GPU，每GPU启动一个ModelServer）')
+    parser.add_argument('--no-model-server', dest='use_model_server', action='store_false',
+                       help='使用独立模型模式（每进程独立模型，显存占用大但延迟低）')
 
     # 压测配置
     parser.add_argument('--num-streams', type=int, default=24,
@@ -180,14 +180,11 @@ def main():
     log_dir = Path(args.log_dir) if args.log_dir else Path(__file__).parent / 'logs'
     logger = setup_logging(log_dir)
 
-    # 解析GPU设备列表
-    gpu_devices = [int(x.strip()) for x in args.gpu_devices.split(',')]
-
     logger.info("="*60)
     logger.info(f"多路并发压测工具 - {args.num_streams} 路并发")
     logger.info("="*60)
     logger.info(f"模式: {'ModelServer（共享模型）' if args.use_model_server else '独立模型（多进程）'}")
-    logger.info(f"GPU设备: {gpu_devices}")
+    logger.info(f"GPU设备: {args.devices}")
     logger.info(f"处理帧率: {args.process_fps} fps")
 
     # 1. 登录
@@ -212,61 +209,103 @@ def main():
         logger.error("没有找到启用的摄像头配置，程序退出")
         return
 
-    # 获取第一个摄像头配置作为模板
-    template_config = list(real_configs.values())[0]
-    logger.info(f"✓ 使用模板配置: {template_config['device_name']}/{template_config['channel_name']}")
-    logger.info(f"  规则: {list(template_config['rules'].keys())}")
+    # 显示所有可用的摄像头
+    logger.info(f"✓ 获取到 {len(real_configs)} 个真实摄像头配置:")
+    for idx, (key, config) in enumerate(real_configs.items()):
+        logger.info(f"  [{idx+1}] {config['device_name']}/{config['channel_name']} - 规则: {list(config['rules'].keys())}")
 
     # 3. 复制配置生成N路
     logger.info(f"\n[3/4] 生成 {args.num_streams} 路配置...")
+
+    # 计算每个真实摄像头需要复制多少份
+    num_real_cameras = len(real_configs)
+    copies_per_camera = args.num_streams // num_real_cameras
+    extra_copies = args.num_streams % num_real_cameras
+
+    logger.info(f"  真实摄像头数量: {num_real_cameras}")
+    logger.info(f"  每个摄像头复制: {copies_per_camera} 份")
+    if extra_copies > 0:
+        logger.info(f"  前 {extra_copies} 个摄像头额外复制1份")
+
     test_configs = {}
+    template_configs = list(real_configs.values())
 
-    for i in range(args.num_streams):
-        # 深拷贝配置
-        config = copy.deepcopy(template_config)
+    for cam_idx, template_config in enumerate(template_configs):
+        # 确定这个摄像头需要复制多少份
+        num_copies = copies_per_camera + (1 if cam_idx < extra_copies else 0)
 
-        # 修改camera_key使其唯一
-        config['camera_key'] = f"{template_config['camera_key']}_test_{i:02d}"
-        config['device_name'] = f"{template_config['device_name']}_测试{i:02d}"
-        config['channel_name'] = f"{template_config['channel_name']}_测试{i:02d}"
+        logger.info(f"\n  摄像头 {cam_idx+1}: {template_config['device_name']}/{template_config['channel_name']}")
+        logger.info(f"    复制 {num_copies} 份")
 
-        test_configs[config['camera_key']] = config
+        for copy_idx in range(num_copies):
+            # 深拷贝配置
+            config = copy.deepcopy(template_config)
 
-    logger.info(f"✓ 生成 {len(test_configs)} 路配置")
+            # 修改camera_key使其唯一
+            original_key = template_config['camera_key']
+            config['camera_key'] = f"{original_key}_copy{copy_idx:02d}"
+            config['device_name'] = f"{template_config['device_name']}_副本{copy_idx:02d}"
+            config['channel_name'] = f"{template_config['channel_name']}_副本{copy_idx:02d}"
+
+            test_configs[config['camera_key']] = config
+
+    logger.info(f"\n✓ 生成 {len(test_configs)} 路配置（{num_real_cameras} 个真实流，每个复制 {copies_per_camera}~{copies_per_camera+1} 份）")
 
     # 3.5. 条件性启动模型服务器
-    model_server = None
-    request_queue = None
-    response_queues = None
+    model_servers = []  # 多个ModelServer实例（每个GPU一个）
+    request_queues = []  # 每个ModelServer的请求队列
+    response_queues_list = []  # 每个ModelServer的响应队列字典
 
     if args.use_model_server:
         logger.info(f"\n[3.5/5] 启动集中式模型服务器...")
-        model_server = ModelServer(
-            model_yaml=args.model_yaml,
-            model_weights=args.weights,
-            thermal_model_yaml=args.thermal_model_yaml,
-            thermal_model_weights=args.thermal_weights,
-            device=f"cuda:{gpu_devices[0]}",  # ModelServer模式只用第一个GPU
-            tracker=args.tracker
-        )
-        model_server.start()
-        logger.info(f"✓ 模型服务器已启动（双模型：可见光+热成像，所有进程共享）")
-        logger.info(f"  GPU: cuda:{gpu_devices[0]}")
-        logger.info(f"  预计显存节省: {(args.num_streams - 1) * 0.5:.1f}GB")
+        logger.info(f"  GPU数量: {len(args.devices)}")
+        logger.info(f"  每个GPU将启动一个独立的ModelServer")
+        logger.info(f"  进程将轮询分配到不同的ModelServer")
 
-        # 获取共享队列
-        request_queue = model_server.request_queue
-        response_queues = model_server.response_queues
+        # 先规划每个GPU需要处理哪些camera（轮询分配）
+        camera_assignments = {}  # {gpu_idx: [camera_keys]}
+        for gpu_idx in range(len(args.devices)):
+            camera_assignments[gpu_idx] = []
 
-        # 预先为每个camera创建响应队列
-        logger.info("为所有camera创建响应队列...")
-        for camera_key in test_configs.keys():
-            response_queues[camera_key] = model_server.manager.Queue()
-        logger.info(f"✓ 已创建 {len(test_configs)} 个响应队列")
+        for idx, camera_key in enumerate(test_configs.keys()):
+            gpu_idx = idx % len(args.devices)
+            camera_assignments[gpu_idx].append(camera_key)
+
+        # 为每个GPU启动一个ModelServer
+        for gpu_idx, device in enumerate(args.devices):
+            logger.info(f"\n  启动GPU{gpu_idx}的ModelServer ({device})...")
+
+            # 获取分配给这个GPU的camera列表
+            assigned_cameras = camera_assignments[gpu_idx]
+
+            model_server = ModelServer(
+                model_yaml=args.model_yaml,
+                model_weights=args.weights,
+                thermal_model_yaml=args.thermal_model_yaml,
+                thermal_model_weights=args.thermal_weights,
+                device=device,
+                tracker=args.tracker
+            )
+            # 传递camera_keys，让ModelServer在启动前创建响应队列
+            model_server.start(camera_keys=assigned_cameras)
+
+            model_servers.append(model_server)
+            request_queues.append(model_server.request_queue)
+            response_queues_list.append(model_server.response_queues)
+
+            logger.info(f"  ✓ GPU{gpu_idx} ModelServer已启动（{len(assigned_cameras)} 个camera）")
+
+        logger.info(f"\n✓ 所有ModelServer已启动（{len(model_servers)} 个GPU，双模型：可见光+热成像）")
+        logger.info(f"  预计总显存占用: {len(args.devices) * 1.0:.1f}GB（每GPU约1GB）")
+        logger.info(f"  进程分配策略: 轮询到{len(args.devices)}个GPU")
     else:
         logger.info(f"\n[3.5/5] 使用独立模型模式（每进程加载独立模型）")
-        logger.info(f"  GPU数量: {len(gpu_devices)}")
-        logger.info(f"  预计显存占用: 每GPU约 {(args.num_streams / len(gpu_devices)) * 0.53:.1f}GB")
+        logger.info(f"  GPU数量: {len(args.devices)}")
+        logger.info(f"  GPU设备: {args.devices}")
+        logger.info(f"  预计显存占用: 每GPU约 {(args.num_streams / len(args.devices)) * 0.53:.1f}GB")
+        logger.info(f"  优点：推理并行，延迟低")
+        logger.info(f"  缺点：GPU显存占用大（每路约1-2GB）")
+        logger.info(f"  进程将在 {len(args.devices)} 个GPU上轮询分配")
 
     # 4. 启动所有进程
     logger.info(f"\n[4/5] 启动 {args.num_streams} 个进程...")
@@ -277,7 +316,12 @@ def main():
 
         # 根据模式准备参数
         if args.use_model_server:
-            # ModelServer模式
+            # ModelServer模式：轮询分配到不同的GPU的ModelServer
+            gpu_idx = idx % len(args.devices)
+            request_queue = request_queues[gpu_idx]
+            response_queues = response_queues_list[gpu_idx]
+            assigned_gpu = args.devices[gpu_idx]
+
             process = Process(
                 target=camera_worker,
                 args=(camera_config, args.model_yaml, args.weights,
@@ -289,10 +333,11 @@ def main():
                 daemon=True,
                 name=f"Camera-{camera_key}"
             )
+
+            logger.info(f"✓ 启动进程 {idx+1}/{args.num_streams}: {camera_key} → GPU{gpu_idx} ({assigned_gpu})")
         else:
             # 独立模型模式：轮询分配GPU
-            gpu_id = gpu_devices[idx % len(gpu_devices)]
-            device = f"cuda:{gpu_id}"
+            device = args.devices[idx % len(args.devices)]
 
             process = Process(
                 target=camera_worker,
@@ -306,11 +351,10 @@ def main():
                 name=f"Camera-{camera_key}"
             )
 
+            logger.info(f"✓ 启动进程 {idx+1}/{args.num_streams}: {camera_key} → {device}")
+
         process.start()
         processes[camera_key] = process
-
-        logger.info(f"✓ 启动进程 {idx+1}/{args.num_streams}: {camera_key}" +
-                   (f" → {device}" if not args.use_model_server else ""))
 
         # 独立模型模式需要错峰加载，避免显存OOM
         if not args.use_model_server:
@@ -361,9 +405,12 @@ def main():
         logger.info("✓ 所有camera进程已停止")
 
         # 停止模型服务器（如果有）
-        if model_server:
-            model_server.stop()
-            logger.info("✓ 模型服务器已停止")
+        if args.use_model_server and model_servers:
+            logger.info(f"正在停止 {len(model_servers)} 个ModelServer...")
+            for idx, model_server in enumerate(model_servers):
+                model_server.stop()
+                logger.info(f"  ✓ GPU{idx} ModelServer已停止")
+            logger.info("✓ 所有ModelServer已停止")
 
 
 if __name__ == '__main__':

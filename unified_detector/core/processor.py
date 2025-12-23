@@ -36,7 +36,8 @@ class CameraProcessor:
                  config_queue: Queue, tracker: str = 'bytetrack',
                  model_client=None,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
-                 fps_active: float = 5.0, person_timeout: int = 5):
+                 fps_active: float = 5.0, person_timeout: int = 5,
+                 tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0):
         """
         Args:
             camera_config: 摄像头配置（包含三个算法规则）
@@ -54,6 +55,8 @@ class CameraProcessor:
             fps_idle: 无人时的帧率
             fps_active: 有人时的帧率
             person_timeout: 多少秒没检测到人后切换到低帧率
+            tripwire_first_alarm_time: 绊线入侵首次报警时间（秒）
+            tripwire_tolerance_time: 绊线入侵容忍时间（秒）
         """
         self.camera_config = camera_config
         self.camera_key = camera_config['camera_key']
@@ -78,6 +81,10 @@ class CameraProcessor:
         self.fps_active = fps_active
         self.person_timeout = person_timeout
         self.has_tripwire = False  # 是否有绊线规则（在_init_rules后判断）
+
+        # 绊线入侵配置
+        self.tripwire_first_alarm_time = tripwire_first_alarm_time
+        self.tripwire_tolerance_time = tripwire_tolerance_time
 
         # 动态帧率状态
         self.current_fps = process_fps  # 当前使用的帧率（初始为默认值）
@@ -213,7 +220,12 @@ class CameraProcessor:
                 if rule_type == 'area_intrusion':
                     rule = AreaIntrusionRule(rule_config, self.camera_key)
                 elif rule_type == 'tripwire_intrusion':
-                    rule = TripwireRule(rule_config, self.camera_key)
+                    rule = TripwireRule(
+                        rule_config,
+                        self.camera_key,
+                        first_alarm_time=self.tripwire_first_alarm_time,
+                        tolerance_time=self.tripwire_tolerance_time
+                    )
                     # 设置图像高度（用于坐标系转换）
                     if self.actual_height is not None:
                         rule.monitor.set_image_height(self.actual_height)
@@ -348,7 +360,7 @@ class CameraProcessor:
                     rules_time = (time.time() - rules_start) * 1000  # 转为ms
                     total_time = (time.time() - process_start) * 1000  # 转为ms
 
-                    logger.debug(f'规则耗时：{total_time}')
+                    # logger.debug(f'规则耗时：{total_time}')
 
                     # 显式释放检测结果内存
                     del detections
@@ -503,7 +515,12 @@ class CameraProcessor:
                     if rule_type == 'area_intrusion':
                         rule = AreaIntrusionRule(rule_config, self.camera_key)
                     elif rule_type == 'tripwire_intrusion':
-                        rule = TripwireRule(rule_config, self.camera_key)
+                        rule = TripwireRule(
+                            rule_config,
+                            self.camera_key,
+                            first_alarm_time=self.tripwire_first_alarm_time,
+                            tolerance_time=self.tripwire_tolerance_time
+                        )
                         # 设置图像高度（用于坐标系转换）
                         if self.actual_height is not None:
                             rule.monitor.set_image_height(self.actual_height)

@@ -1,0 +1,1 @@
+timestamp,gpu_util_%,gpu_mem_used_mb,gpu_mem_total_mb,gpu_mem_%,gpu_temp_c,cpu_%,sys_mem_used_gb,sys_mem_total_gb,sys_mem_%

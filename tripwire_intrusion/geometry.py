@@ -171,3 +171,53 @@ def get_bbox_center(bbox: list) -> Tuple[float, float]:
     """
     x1, y1, x2, y2 = bbox
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
+def compute_point_side(line_p1: Tuple[float, float],
+                       line_p2: Tuple[float, float],
+                       point: Tuple[float, float],
+                       image_height: int = None) -> str:
+    """
+    判断点在线段的哪一侧
+
+    使用叉积判断点相对于有向线段的位置
+    为了符合传统数学直觉，将图像坐标系转换为左下角为原点（Y轴向上）再计算
+
+    Args:
+        line_p1: 绊线起点 (x, y) - 图像坐标系
+        line_p2: 绊线终点 (x, y) - 图像坐标系
+        point: 目标位置 (x, y) - 图像坐标系
+        image_height: 图像高度（用于坐标转换），如果为None则使用图像坐标系直接计算
+
+    Returns:
+        str: 点的位置
+            - 'left': 在左侧
+            - 'right': 在右侧
+            - 'on': 在线上（极少见）
+    """
+    # 如果提供了图像高度，转换到传统坐标系（左下角为原点，Y轴向上）
+    if image_height is not None:
+        # 转换坐标：y_new = image_height - y_old
+        p1 = (line_p1[0], image_height - line_p1[1])
+        p2 = (line_p2[0], image_height - line_p2[1])
+        pt = (point[0], image_height - point[1])
+    else:
+        # 直接使用图像坐标系
+        p1 = line_p1
+        p2 = line_p2
+        pt = point
+
+    # 绊线向量
+    line_vec = np.array([p2[0] - p1[0], p2[1] - p1[1]])
+
+    # 计算点相对于线段的叉积
+    vec_to_point = np.array([pt[0] - p1[0], pt[1] - p1[1]])
+    cross_product = np.cross(line_vec, vec_to_point)
+
+    # 根据叉积符号判断位置
+    if cross_product > 1e-6:  # 左侧
+        return 'left'
+    elif cross_product < -1e-6:  # 右侧
+        return 'right'
+    else:  # 在线上
+        return 'on'
