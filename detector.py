@@ -88,10 +88,10 @@ class Detector:
 
     def preprocess(self, infrared_img, target_size=640, stride=32, auto=True):
         """
-        预处理红外图像（与Ultralytics LetterBox完全一致）
+        预处理图像（与Ultralytics LetterBox完全一致）
 
         Args:
-            infrared_img: 红外图像 (H, W, 3)
+            infrared_img: 图像 (H, W, 3)
             target_size: 目标尺寸
             stride: 模型步长，默认32
             auto: 是否使用最小矩形模式（与Ultralytics predict一致）
@@ -152,11 +152,50 @@ class Detector:
 
         return rgb, r, (top, left)
 
+    def preprocess_batch(self, images, target_size=640, stride=32, auto=False):
+        """
+        批量预处理图像
+
+        Args:
+            images: 图像列表 [img1, img2, ...], 每个img为 (H, W, 3)
+            target_size: 目标尺寸
+            stride: 模型步长
+            auto: 批量推理时必须为False，确保所有图片统一尺寸
+
+        Returns:
+            batch_tensor: (B, 3, H, W) tensor
+            scales: 缩放比例列表
+            pads: padding信息列表
+            orig_shapes: 原始尺寸列表
+        """
+        # 批量推理必须统一尺寸，强制auto=False
+        auto = False
+
+        batch_tensors = []
+        scales = []
+        pads = []
+        orig_shapes = []
+
+        for img in images:
+            # 保存原始尺寸
+            orig_shapes.append(img.shape[:2])
+
+            # 单张预处理（auto=False保证统一尺寸）
+            tensor, scale, pad = self.preprocess(img, target_size, stride, auto)
+            batch_tensors.append(tensor)
+            scales.append(scale)
+            pads.append(pad)
+
+        # 拼接成batch
+        batch_tensor = torch.cat(batch_tensors, dim=0)  # (B, 3, H, W)
+
+        return batch_tensor, scales, pads, orig_shapes
+
     @torch.no_grad()
     def detect(self, infrared_img, conf_thresh=0.25, iou_thresh=0.7,
                target_size=640, auto=True):
         """
-        检测函数
+        检测函数（单张图像）
 
         Args:
             infrared_img: 红外图像 (H, W, 3)
@@ -177,35 +216,76 @@ class Detector:
         input_tensor = input_tensor.to(self.device)
 
         # 前向推理
-        predictions = self.model(input_tensor)  # (1, num_anchors, 3+nc)
+        predictions = self.model(input_tensor)  # (1, num_anchors, 4+nc)
 
         # NMS后处理
         detections = self.postprocess(
             predictions,
             conf_thresh=conf_thresh,
             iou_thresh=iou_thresh,
-            orig_shape=(orig_h, orig_w),
-            scale=scale,
-            pad=(pad_top, pad_left)
-        )
+            orig_shapes=[(orig_h, orig_w)],
+            scales=[scale],
+            pads=[(pad_top, pad_left)]
+        )[0]  # 返回第一个（唯一的）结果
 
         return detections
 
-    def postprocess(self, predictions, conf_thresh, iou_thresh,
-                   orig_shape, scale, pad):
+    @torch.no_grad()
+    def detect_batch(self, images, conf_thresh=0.25, iou_thresh=0.7,
+                     target_size=640):
         """
-        后处理：NMS + 坐标还原
+        批量检测函数
+
+        注意：批量推理时强制 auto=False，确保所有图片统一尺寸
 
         Args:
-            predictions: 模型输出 (1, num_anchors, 4+nc)
+            images: 图像列表 [img1, img2, ...], 每个img为 (H, W, 3)
             conf_thresh: 置信度阈值
-            iou_thresh: IOU阈值
-            orig_shape: 原始图像尺寸 (H, W)
-            scale: 缩放比例
-            pad: padding (top, left)
+            iou_thresh: NMS的IOU阈值
+            target_size: 推理尺寸 (默认640，需与训练时一致)
 
         Returns:
-            detections: list of dict
+            batch_detections: list of list, 每个元素是一张图片的检测结果
+                [[det1, det2, ...], [det1, ...], ...]
+        """
+        # 批量预处理（内部强制auto=False确保统一尺寸）
+        batch_tensor, scales, pads, orig_shapes = self.preprocess_batch(
+            images, target_size
+        )
+
+        batch_tensor = batch_tensor.to(self.device)
+
+        # 批量前向推理
+        predictions = self.model(batch_tensor)  # (B, num_anchors, 4+nc)
+
+        # 批量NMS后处理
+        batch_detections = self.postprocess(
+            predictions,
+            conf_thresh=conf_thresh,
+            iou_thresh=iou_thresh,
+            orig_shapes=orig_shapes,
+            scales=scales,
+            pads=pads
+        )
+
+        return batch_detections
+
+    def postprocess(self, predictions, conf_thresh, iou_thresh,
+                   orig_shapes, scales, pads):
+        """
+        后处理：NMS + 坐标还原（支持批量）
+
+        Args:
+            predictions: 模型输出 (B, num_anchors, 4+nc)
+            conf_thresh: 置信度阈值
+            iou_thresh: IOU阈值
+            orig_shapes: 原始图像尺寸列表 [(H1, W1), (H2, W2), ...]
+            scales: 缩放比例列表 [scale1, scale2, ...]
+            pads: padding列表 [(top1, left1), (top2, left2), ...]
+
+        Returns:
+            batch_detections: list of list，每张图片的检测结果
+                [[det1, det2, ...], [det1, ...], ...]
         """
         # 使用Ultralytics的NMS函数
         predictions = ops.non_max_suppression(
@@ -215,38 +295,46 @@ class Detector:
             nc=self.nc  # 使用保存的类别数
         )
 
-        detections = []
-        for pred in predictions:  # 遍历batch
-            if pred is None or len(pred) == 0:
-                continue
+        batch_detections = []
 
-            # pred: (N, 6) [x1, y1, x2, y2, conf, cls]
-            pred = pred.cpu().numpy()
+        # 遍历batch中的每张图片
+        for i, pred in enumerate(predictions):
+            detections = []
 
-            # 坐标还原（去掉padding和缩放）
-            pad_top, pad_left = pad
-            for det in pred:
-                x1, y1, x2, y2, conf, cls = det
+            if pred is not None and len(pred) > 0:
+                # pred: (N, 6) [x1, y1, x2, y2, conf, cls]
+                pred = pred.cpu().numpy()
 
-                # 去除padding
-                x1 = (x1 - pad_left) / scale
-                y1 = (y1 - pad_top) / scale
-                x2 = (x2 - pad_left) / scale
-                y2 = (y2 - pad_top) / scale
+                # 获取当前图片的参数
+                orig_shape = orig_shapes[i]
+                scale = scales[i]
+                pad_top, pad_left = pads[i]
 
-                # 裁剪到原始图像范围
-                x1 = max(0, min(x1, orig_shape[1]))
-                y1 = max(0, min(y1, orig_shape[0]))
-                x2 = max(0, min(x2, orig_shape[1]))
-                y2 = max(0, min(y2, orig_shape[0]))
+                # 坐标还原（去掉padding和缩放）
+                for det in pred:
+                    x1, y1, x2, y2, conf, cls = det
 
-                detections.append({
-                    'box': [x1, y1, x2, y2],
-                    'conf': float(conf),
-                    'cls': int(cls)
-                })
+                    # 去除padding
+                    x1 = (x1 - pad_left) / scale
+                    y1 = (y1 - pad_top) / scale
+                    x2 = (x2 - pad_left) / scale
+                    y2 = (y2 - pad_top) / scale
 
-        return detections
+                    # 裁剪到原始图像范围
+                    x1 = max(0, min(x1, orig_shape[1]))
+                    y1 = max(0, min(y1, orig_shape[0]))
+                    x2 = max(0, min(x2, orig_shape[1]))
+                    y2 = max(0, min(y2, orig_shape[0]))
+
+                    detections.append({
+                        'box': [x1, y1, x2, y2],
+                        'conf': float(conf),
+                        'cls': int(cls)
+                    })
+
+            batch_detections.append(detections)
+
+        return batch_detections
 
     def visualize(self, image, detections, class_names=None):
         """

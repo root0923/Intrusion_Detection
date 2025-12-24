@@ -86,7 +86,7 @@ def main():
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = r"data\dataset\video_IR\test00.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = "./data/dataset/video_IR/test00.mp4"  # 0=摄像头, 或者视频文件路径
 
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
     model_weights = "data/LLVIP-yolo11m-e300-16-pretrained.pt"

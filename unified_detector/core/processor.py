@@ -147,7 +147,7 @@ class CameraProcessor:
                 logger.error(f"[{self.camera_key}] 无法打开视频流")
                 return
 
-            # 降低缓冲区大小，防止内存堆积
+            # 降低缓冲区大小，防止内存堆积。 保证推理的帧为最新一帧
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             logger.info(f"[{self.camera_key}] 已设置缓冲区大小为1")
 
@@ -387,11 +387,6 @@ class CameraProcessor:
                     avg_rules = sum(self.perf_stats['rule_times']) / len(self.perf_stats['rule_times'])
                     avg_total = sum(self.perf_stats['total_times']) / len(self.perf_stats['total_times'])
 
-                    # 获取当前进程内存使用情况
-                    process = psutil.Process(os.getpid())
-                    mem_info = process.memory_info()
-                    mem_mb = mem_info.rss / 1024 / 1024  # RSS内存（实际物理内存）
-
                     # 计算帧间隔统计
                     interval_info = ""
                     if len(self.perf_stats['frame_intervals']) > 0:
@@ -409,42 +404,27 @@ class CameraProcessor:
                         elif delay_pct > -10:
                             interval_info += " ✓"
 
-                    # 内存警告
-                    mem_warning = ""
-                    if mem_mb > 2000:  # 超过2GB警告
-                        mem_warning = " ⚠️ 内存过高"
-                    elif mem_mb > 1000:  # 超过1GB提示
-                        mem_warning = " ⚠️"
-
                     logger.info(f"[{self.camera_key}] 帧: {self.frame_count} | "
                                f"当前fps: {self.current_fps:.1f} | "
                                f"推理: {avg_inference:.1f}ms | "
                                f"规则: {avg_rules:.1f}ms | "
                                f"总计: {avg_total:.1f}ms{interval_info} | "
-                               f"内存: {mem_mb:.1f}MB{mem_warning} | "
                                f"活跃规则: {list(self.rules.keys())}")
 
-                # 周期性强制垃圾回收（内存过高时更频繁）
+                # 周期性强制垃圾回收
                 current_time_gc = time.time()
 
                 # 获取当前内存占用
                 process_mem = psutil.Process(os.getpid())
                 current_mem_mb = process_mem.memory_info().rss / 1024 / 1024
 
-                # 动态调整GC间隔：内存高时更频繁
-                dynamic_gc_interval = gc_interval
-                if current_mem_mb > 1500:  # 超过1.5GB时每10秒GC
-                    dynamic_gc_interval = 10
-                elif current_mem_mb > 1000:  # 超过1GB时每20秒GC
-                    dynamic_gc_interval = 20
-
-                if current_time_gc - last_gc_time >= dynamic_gc_interval:
+                if current_time_gc - last_gc_time >= gc_interval:
                     mem_before = current_mem_mb
                     collected = gc.collect()
                     mem_after = process_mem.memory_info().rss / 1024 / 1024
                     freed_mb = mem_before - mem_after
 
-                    if freed_mb > 10:  # 释放超过10MB才记录
+                    if freed_mb > 100:  # 释放超过100MB才记录
                         logger.info(f"[{self.camera_key}] GC完成: 回收{collected}个对象, "
                                   f"释放{freed_mb:.1f}MB ({mem_before:.1f}MB → {mem_after:.1f}MB)")
                     else:

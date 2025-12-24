@@ -24,7 +24,7 @@ class WaterSafetyRule(RuleEngine):
         """初始化涉水安全特定配置"""
         # 涉水安全特有配置（与区域入侵相同）
         self.first_alarm_time = self.rule_config.get('first_alarm_time', 1.0)
-        self.tolerance_time = 3.0  # 容忍时间，默认3秒
+        self.tolerance_time = 10.0  # 容忍时间，默认3秒
         self.frontend_width = self.rule_config.get('frontend_width', 1920)
         self.frontend_height = self.rule_config.get('frontend_height', 1080)
         self.rois = self.rule_config.get('roi_arrays', [])  # 转换后的ROI坐标
@@ -111,14 +111,11 @@ class WaterSafetyRule(RuleEngine):
         # 可视化
         vis_frame = frame.copy()
 
-        # 绘制ROI（水域区域）
         vis_frame = draw_rois(vis_frame, self.rois, color=(0, 255, 255), thickness=2)
 
-        # 绘制检测框
         vis_frame = draw_detections(vis_frame, intruders, conf_threshold=self.sensitivity,
                                     class_names={0: 'person'})
 
-        # 绘制报警文字
         vis_frame = draw_alarm_text(vis_frame, "ALARM! WATER SAFETY DETECTED")
 
         # 编码图片
@@ -147,7 +144,7 @@ class WaterSafetyRule(RuleEngine):
         self.rule_config = new_config
         self.sensitivity = new_config.get('sensitivity', 0.75)
         self.first_alarm_time = new_config.get('first_alarm_time', 1.0)
-        self.tolerance_time = 3.0
+        self.tolerance_time = 10.0
         self.repeated_alarm_time = new_config.get('repeated_alarm_time', 30.0)
         self.rois = new_config.get('roi_arrays', [])
         self.device_info = new_config.get('device_info', {})

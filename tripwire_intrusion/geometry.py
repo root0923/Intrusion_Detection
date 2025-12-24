@@ -178,10 +178,12 @@ def compute_point_side(line_p1: Tuple[float, float],
                        point: Tuple[float, float],
                        image_height: int = None) -> str:
     """
-    判断点在线段的哪一侧
+    判断点在线段的哪一侧（只检测线段范围内，不包括延长线）
 
     使用叉积判断点相对于有向线段的位置
     为了符合传统数学直觉，将图像坐标系转换为左下角为原点（Y轴向上）再计算
+
+    重要：只检测线段本身的范围，不检测延长线，避免误报
 
     Args:
         line_p1: 绊线起点 (x, y) - 图像坐标系
@@ -191,9 +193,10 @@ def compute_point_side(line_p1: Tuple[float, float],
 
     Returns:
         str: 点的位置
-            - 'left': 在左侧
-            - 'right': 在右侧
+            - 'left': 在左侧（且在线段范围内）
+            - 'right': 在右侧（且在线段范围内）
             - 'on': 在线上（极少见）
+            - 'outside': 在线段延长线上（不在两端点之间）
     """
     # 如果提供了图像高度，转换到传统坐标系（左下角为原点，Y轴向上）
     if image_height is not None:
@@ -210,8 +213,26 @@ def compute_point_side(line_p1: Tuple[float, float],
     # 绊线向量
     line_vec = np.array([p2[0] - p1[0], p2[1] - p1[1]])
 
-    # 计算点相对于线段的叉积
+    # 线段长度的平方
+    line_len_sq = line_vec[0] ** 2 + line_vec[1] ** 2
+
+    # 如果线段退化为点
+    if line_len_sq < 1e-10:
+        return 'on'
+
+    # 计算点到线段的向量
     vec_to_point = np.array([pt[0] - p1[0], pt[1] - p1[1]])
+
+    # 计算投影参数 t（点在线段上的投影位置）
+    # t = 0 表示在 p1，t = 1 表示在 p2
+    t = np.dot(vec_to_point, line_vec) / line_len_sq
+
+    # 检查点是否在线段的垂直投影范围内
+    if t < 0 or t > 1:
+        # 点在线段延长线上，不在两端点之间
+        return 'outside'
+
+    # 计算点相对于线段的叉积
     cross_product = np.cross(line_vec, vec_to_point)
 
     # 根据叉积符号判断位置

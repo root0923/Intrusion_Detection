@@ -214,12 +214,16 @@ class TripwireMonitor:
                     image_height=self.image_height
                 )
 
+                # 如果点在线段延长线上（不在线段范围内），跳过此绊线
+                if side == 'outside':
+                    continue
+
                 # 根据方向配置判断是否在危险侧
                 # left-to-right: 检测右侧
                 # right-to-left: 检测左侧
                 is_danger = False
                 detected_direction = None
-                
+
                 print(tripwire.direction, side)
 
                 if tripwire.direction == 'left-to-right' and side == 'right':

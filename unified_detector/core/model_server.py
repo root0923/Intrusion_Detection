@@ -7,7 +7,7 @@
 - 避免重复加载模型，大幅节省内存
 
 使用场景：
-- 内存受限，需要运行多路视频流
+- 显存受限，需要运行多路视频流
 - 多路共享同一个GPU模型
 """
 
@@ -53,7 +53,7 @@ class ModelServer:
         self.detector_visible = None  # 可见光模型
         self.detector_thermal = None  # 热成像模型
 
-    def start(self, camera_keys=None, max_cameras=50):
+    def start(self, camera_keys=None, max_cameras=30):
         """
         启动模型服务器进程（Python 3.8兼容：预留槽位方案）
 
