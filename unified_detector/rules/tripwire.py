@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 
 
 class Track:
-    """轨迹对象（适配TripwireMonitor接口）"""
+    """轻量级Track对象（仅包含当前位置，适配TripwireMonitor接口）"""
 
     def __init__(self, track_id: int, bbox: list, conf: float, cls: int):
         self.track_id = track_id
         self.bbox = bbox
         self.conf = conf
         self.cls = cls
-        self.trajectory = deque(maxlen=30)  # 保留最近30个位置点
+        self.trajectory = deque(maxlen=1)  # 只保留当前位置
 
         # 添加底部中心点到轨迹
         center = self._get_bottom_center(bbox)
@@ -43,14 +43,6 @@ class Track:
         """获取检测框底部中心点"""
         x1, y1, x2, y2 = bbox
         return ((x1 + x2) / 2.0, y2)
-
-    def update(self, bbox: list, conf: float, cls: int):
-        """更新轨迹"""
-        self.bbox = bbox
-        self.conf = conf
-        self.cls = cls
-        center = self._get_bottom_center(bbox)
-        self.trajectory.append(center)
 
 
 class TripwireRule(RuleEngine):
@@ -83,12 +75,6 @@ class TripwireRule(RuleEngine):
         # 使用从main.py传入的参数，而不是从rule_config读取
         self.first_alarm_time = self._first_alarm_time
         self.tolerance_time = self._tolerance_time
-
-        # Track管理
-        self.track_history = {}  # {track_id: Track对象}
-        self.track_last_seen = {}  # {track_id: 最后出现的帧号}
-        self.frame_count = 0
-        self.max_frames_to_keep = 60  # 保留track的最大帧数
 
         # 创建临时配置文件并初始化TripwireMonitor
         self._init_tripwire_monitor()
@@ -136,7 +122,7 @@ class TripwireRule(RuleEngine):
 
         Args:
             frame: 当前帧图像
-            detections: 检测结果列表（必须包含track_id）
+            detections: 检测结果列表（不需要track_id）
             timestamp: 当前时间戳
 
         Returns:
@@ -145,55 +131,27 @@ class TripwireRule(RuleEngine):
         if not self.enabled:
             return None
 
-        self.frame_count += 1
-
         # 1. 过滤置信度
         valid_detections = self.filter_by_confidence(detections)
 
-        # 2. 转换为Track对象并更新轨迹
+        # 2. 为每个检测框创建临时Track对象（只包含当前位置）
         current_tracks = []
-        current_track_ids = set()
+        for idx, det in enumerate(valid_detections):
+            # 使用检测框索引作为临时track_id
+            temp_track_id = idx
+            track = Track(
+                temp_track_id, det['bbox'], det['conf'], det['cls']
+            )
+            current_tracks.append(track)
 
-        for det in valid_detections:
-            # 绊线规则必须有track_id
-            if 'track_id' not in det:
-                continue
-
-            track_id = det['track_id']
-            current_track_ids.add(track_id)
-
-            if track_id not in self.track_history:
-                # 创建新track
-                self.track_history[track_id] = Track(
-                    track_id, det['bbox'], det['conf'], det['cls']
-                )
-            else:
-                # 更新已有track
-                self.track_history[track_id].update(det['bbox'], det['conf'], det['cls'])
-
-            self.track_last_seen[track_id] = self.frame_count
-            current_tracks.append(self.track_history[track_id])
-
-        # 3. 清理旧track
-        tracks_to_remove = []
-        for track_id, last_seen in self.track_last_seen.items():
-            if self.frame_count - last_seen > self.max_frames_to_keep:
-                tracks_to_remove.append(track_id)
-
-        for track_id in tracks_to_remove:
-            if track_id in self.track_history:
-                del self.track_history[track_id]
-            if track_id in self.track_last_seen:
-                del self.track_last_seen[track_id]
-
-        # 4. 调用TripwireMonitor检测越线
+        # 3. 调用TripwireMonitor检测越线
         events = self.monitor.update(current_tracks)
 
-        # 5. 处理报警（TripwireMonitor内部已处理全局冷却）
+        # 4. 处理报警（TripwireMonitor内部已处理全局冷却）
         if events:
             event = events[0]  # 取第一个事件
             alarm_info = self._create_alarm_info(frame, event, current_tracks, timestamp)
-            logger.info(f"[{self.camera_key}] 🚨 绊线入侵报警! Track {event.track_id} "
+            logger.info(f"[{self.camera_key}] 🚨 绊线入侵报警! "
                        f"crossed {event.tripwire_id} ({event.direction})")
             return alarm_info
 
@@ -236,9 +194,6 @@ class TripwireRule(RuleEngine):
 
     def reset(self):
         """重置规则状态"""
-        self.track_history = {}
-        self.track_last_seen = {}
-        self.frame_count = 0
         self.last_alarm_time = None
 
         # 重新初始化TripwireMonitor

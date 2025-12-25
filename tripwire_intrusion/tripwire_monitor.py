@@ -201,7 +201,6 @@ class TripwireMonitor:
 
             # 获取当前位置
             track_curr = track.trajectory[-1]
-            print(f'位置：{track_curr}')
 
             # 检查每条绊线
             for tripwire in self.tripwires:
@@ -224,7 +223,7 @@ class TripwireMonitor:
                 is_danger = False
                 detected_direction = None
 
-                print(tripwire.direction, side)
+                # print(tripwire.direction, side)
 
                 if tripwire.direction == 'left-to-right' and side == 'right':
                     is_danger = True

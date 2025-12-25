@@ -293,9 +293,9 @@ class CameraProcessor:
 
                     self.perf_stats['last_process_time'] = current_time
 
-                    # 4. 统一推理（一次）
+                    # 4. 统一推理（一次，不带跟踪）
                     inference_start = time.time()
-                    detections = self.detector.detect_and_track(
+                    detections = self.detector.detect(
                         frame,
                         conf_threshold=0.25,  # 统一用0.25，后续规则再过滤
                         iou_threshold=0.7,

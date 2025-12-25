@@ -302,8 +302,8 @@ class ModelServer:
                     else:
                         detector = detector_visible
 
-                    # 执行检测
-                    detections = detector.detect_and_track(
+                    # 执行检测（不带跟踪）
+                    detections = detector.detect(
                         frame, conf_threshold, iou_threshold, target_size
                     )
 
@@ -364,13 +364,13 @@ class LightweightModelClient:
 
         logger.info(f"[{client_id}] 轻量级客户端已创建 (模型类型: {'热成像' if model_type == 'thermal' else '可见光'})")
 
-    def detect_and_track(self, frame: np.ndarray,
-                        conf_threshold: float = 0.25,
-                        iou_threshold: float = 0.7,
-                        target_size: int = 640,
-                        timeout: float = 5.0) -> list:
+    def detect(self, frame: np.ndarray,
+               conf_threshold: float = 0.25,
+               iou_threshold: float = 0.7,
+               target_size: int = 640,
+               timeout: float = 5.0) -> list:
         """
-        检测和跟踪（接口兼容UnifiedDetector）
+        检测（不跟踪，接口兼容UnifiedDetector）
 
         Args:
             frame: 输入图像
@@ -414,3 +414,23 @@ class LightweightModelClient:
         except Empty:
             logger.warning(f"[{self.client_id}] 推理超时 ({timeout}s)")
             return []
+
+    def detect_and_track(self, frame: np.ndarray,
+                        conf_threshold: float = 0.25,
+                        iou_threshold: float = 0.7,
+                        target_size: int = 640,
+                        timeout: float = 5.0) -> list:
+        """
+        检测和跟踪（已废弃，保留用于兼容性，内部调用detect）
+
+        Args:
+            frame: 输入图像
+            conf_threshold: 置信度阈值
+            iou_threshold: IOU阈值
+            target_size: 推理尺寸
+            timeout: 超时时间(秒)
+
+        Returns:
+            detections: 检测结果
+        """
+        return self.detect(frame, conf_threshold, iou_threshold, target_size, timeout)

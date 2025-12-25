@@ -5,6 +5,7 @@
 - 测试 unified_detector 框架中的 TripwireRule
 - 使用本地绊线配置文件
 - 不依赖后端API，纯本地测试
+- 使用 detect() 方法（不需要跟踪）
 """
 import sys
 import os
@@ -39,8 +40,9 @@ def load_tripwire_config(config_path: str):
     print(f"✓ 加载绊线配置: {len(config['tripwires'])} 条绊线")
     for tw in config['tripwires']:
         print(f"  - {tw['id']}: {tw['direction']}, cooldown={tw['alert_cooldown']}s")
+        direction = tw['direction']
 
-    return config
+    return config, direction
 
 
 def convert_tripwires_to_actual_size(tripwires, config_width, config_height, actual_width, actual_height):
@@ -89,7 +91,7 @@ def main():
 
     # 1. 配置参数
     tripwire_config_path = "tripwire_intrusion/config_line.json"
-    video_source = r"data\dataset\video_IR\test3.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = "data/dataset/video_IR/test2.mp4"  # 0=摄像头, 或者视频文件路径
 
     # 假设配置文件中的坐标是基于640x480的
     config_width = 640
@@ -98,13 +100,12 @@ def main():
     model_yaml = "ultralytics/cfg/models/11/yolo11x.yaml"
     model_weights = "data/LLVIP_IF-yolo11x-e300-16-pretrained.pt"
     device = "cuda:0"  # 或 "cpu"
-    tracker = "bytetrack"
     target_size = 800
     conf_threshold = 0.25
 
     # 2. 加载绊线配置
     print("\n[1/6] 加载绊线配置...")
-    tripwire_config = load_tripwire_config(tripwire_config_path)
+    tripwire_config, direction = load_tripwire_config(tripwire_config_path)
 
     # 3. 打开视频流
     print(f"\n[2/6] 打开视频流...")
@@ -139,7 +140,7 @@ def main():
 
     # 5. 初始化检测器
     print(f"\n[4/6] 初始化YOLO检测器...")
-    detector = UnifiedDetector(model_yaml, model_weights, device, tracker)
+    detector = UnifiedDetector(model_yaml, model_weights, device)  # tracker参数有默认值，不传也可以
     print("✓ 检测器初始化完成")
 
     # 6. 初始化规则引擎
@@ -148,10 +149,10 @@ def main():
         converted_lines,
         actual_width,
         actual_height,
-        direction='double-direction',  # 可以改成 'left-to-right' 或 'right-to-left'
-        repeated_alarm_time=1.0
+        direction,  # 可以改成 'left-to-right' 或 'right-to-left'
+        repeated_alarm_time=2.0
     )
-    rule = TripwireRule(rule_config, camera_key="test_camera")
+    rule = TripwireRule(rule_config, camera_key="test_camera", first_alarm_time=2, tolerance_time=5)
 
     # 设置图像高度（用于坐标系转换）
     rule.monitor.set_image_height(actual_height)
@@ -167,7 +168,7 @@ def main():
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
     frame_count = 0
-    process_interval = 5 
+    process_interval = 2 
     times = []
 
     try:
@@ -182,9 +183,9 @@ def main():
 
             # 每隔process_interval帧处理一次
             if (frame_count - 1) % process_interval == 0:
-                # 检测和跟踪（必须开启跟踪）
+                # 检测（不需要跟踪）
                 time_1 = time.time()
-                detections = detector.detect_and_track(
+                detections = detector.detect(
                     frame,
                     conf_threshold=conf_threshold,
                     iou_threshold=0.7,
@@ -202,22 +203,12 @@ def main():
                 # 绘制绊线
                 vis_frame = draw_tripwires(vis_frame, converted_lines, color=(0, 255, 255), thickness=3)
 
-                # 绘制检测框和轨迹
+                # 绘制检测框
                 vis_frame = draw_detections(vis_frame, detections, conf_threshold=rule.sensitivity,
                                            class_names={0: 'person'})
 
-                # 绘制轨迹
-                for track_id, track in rule.track_history.items():
-                    # 绘制轨迹点
-                    trajectory = list(track.trajectory)
-                    if len(trajectory) > 1:
-                        for i in range(len(trajectory) - 1):
-                            pt1 = (int(trajectory[i][0]), int(trajectory[i][1]))
-                            pt2 = (int(trajectory[i+1][0]), int(trajectory[i+1][1]))
-                            cv2.line(vis_frame, pt1, pt2, (0, 255, 0), 2)
-
                 # 显示状态信息
-                status_text = f"Frame: {frame_count} | Detections: {len(detections)} | Tracks: {len(rule.track_history)}"
+                status_text = f"Frame: {frame_count} | Detections: {len(detections)}"
                 cv2.putText(vis_frame, status_text, (10, 30),
                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
@@ -253,7 +244,10 @@ def main():
                 # 重置规则状态
                 rule.reset()
                 print("✓ 规则状态已重置")
-        print(sum(times)/len(times) if times else 0)
+
+        if times:
+            avg_time = sum(times) / len(times)
+            print(f"\n✓ 平均推理+规则处理时间: {avg_time:.2f}ms")
     except KeyboardInterrupt:
         print("\n\n用户中断")
 

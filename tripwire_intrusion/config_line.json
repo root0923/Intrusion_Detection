@@ -4,36 +4,15 @@
       "id": "line_1",
       "points": [
         [
-          572,
-          219
+          354,
+          408
         ],
         [
-          543,
-          334
+          366,
+          283
         ]
       ],
-      "direction": "left_to_right",
-      "enabled": true,
-      "alert_cooldown": 2.0,
-      "color": [
-        0,
-        255,
-        0
-      ]
-    },
-    {
-      "id": "line_2",
-      "points": [
-        [
-          543,
-          334
-        ],
-        [
-          488,
-          438
-        ]
-      ],
-      "direction": "left_to_right",
+      "direction": "left-to-right",
       "enabled": true,
       "alert_cooldown": 2.0,
       "color": [
