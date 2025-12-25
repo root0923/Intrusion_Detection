@@ -16,13 +16,11 @@ import psutil
 import os
 from typing import Dict, Optional
 from multiprocessing import Queue
-from .detector import UnifiedDetector
 from .api_client import APIClient
 from unified_detector.rules.area_intrusion import AreaIntrusionRule
 from unified_detector.rules.water_safety import WaterSafetyRule
 from unified_detector.rules.tripwire import TripwireRule
 from unified_detector.utils.config_parser import ConfigParser
-from unified_detector.utils.geometry import draw_detections
 
 logger = logging.getLogger(__name__)
 
@@ -33,24 +31,22 @@ class CameraProcessor:
     def __init__(self, camera_config: Dict, model_yaml: str, model_weights: str,
                  device: str, target_size: int, process_fps: float,
                  api_base_url: str, api_token: str,
-                 config_queue: Queue, tracker: str = 'bytetrack',
-                 model_client=None,
+                 config_queue: Queue, model_client=None,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
                  fps_active: float = 5.0, person_timeout: int = 5,
                  tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0):
         """
         Args:
             camera_config: 摄像头配置（包含三个算法规则）
-            model_yaml: 模型配置文件路径（如果使用model_client则为None）
-            model_weights: 模型权重文件路径（如果使用model_client则为None）
-            device: 设备（如果使用model_client则为None）
+            model_yaml: 模型配置文件路径
+            model_weights: 模型权重文件路径
+            device: 设备
             target_size: 推理图像尺寸
             process_fps: 处理帧率
             api_base_url: API基础URL
             api_token: API token
             config_queue: 配置更新队列
-            tracker: 跟踪器类型（如果使用model_client则为None）
-            model_client: 轻量级模型客户端（可选，用于多进程共享模型）
+            model_client: 轻量级模型客户端（必须使用，用于多进程共享模型）
             enable_adaptive_fps: 启用自适应帧率
             fps_idle: 无人时的帧率
             fps_active: 有人时的帧率
@@ -68,8 +64,7 @@ class CameraProcessor:
         self.device = device
         self.target_size = target_size
         self.process_fps = process_fps
-        self.tracker = tracker
-        self.model_client = model_client  # 新增：轻量级模型客户端
+        self.model_client = model_client  # 轻量级模型客户端
 
         self.api_base_url = api_base_url
         self.api_token = api_token
@@ -165,22 +160,13 @@ class CameraProcessor:
             logger.info(f"[{self.camera_key}] 转换坐标...")
             ConfigParser.convert_coordinates(self.camera_config, self.actual_width, self.actual_height)
 
-            # 5. 初始化检测器
-            if self.model_client is not None:
-                # 使用共享模型客户端
-                logger.info(f"[{self.camera_key}] 使用共享模型服务器...")
-                self.detector = self.model_client
-                logger.info(f"[{self.camera_key}] ✓ 已连接到模型服务器")
-            else:
-                # 独立加载模型
-                logger.info(f"[{self.camera_key}] 初始化YOLO检测器...")
-                self.detector = UnifiedDetector(
-                    self.model_yaml,
-                    self.model_weights,
-                    self.device,
-                    self.tracker
-                )
-                logger.info(f"[{self.camera_key}] ✓ YOLO检测器初始化完成")
+            # 5. 初始化检测器（使用共享模型客户端）
+            if self.model_client is None:
+                raise ValueError(f"[{self.camera_key}] model_client不能为None，必须使用共享模型服务器")
+
+            logger.info(f"[{self.camera_key}] 使用共享模型服务器...")
+            self.detector = self.model_client
+            logger.info(f"[{self.camera_key}] ✓ 已连接到模型服务器")
 
             # 6. 初始化规则引擎
             logger.info(f"[{self.camera_key}] 初始化规则引擎...")

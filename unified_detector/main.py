@@ -57,8 +57,8 @@ class ProcessManager:
 
     def __init__(self, api_client: APIClient, model_yaml: str, model_weights: str,
                  thermal_model_yaml: str, thermal_model_weights: str,
-                 devices: list, target_size: int, process_fps: float, tracker: str, logdir: Path,
-                 use_model_server: bool = False,
+                 devices: list, target_size: int, process_fps: float, logdir: Path,
+                 use_model_server: bool = True,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
                  fps_active: float = 5.0, person_timeout: int = 5,
                  tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0):
@@ -72,7 +72,6 @@ class ProcessManager:
             devices: 设备列表（例如 ['cuda:0', 'cuda:1']）
             target_size: 推理图像尺寸
             process_fps: 处理帧率
-            tracker: 跟踪器类型
             logdir: 日志目录
             use_model_server: 是否使用集中式模型服务器
                 - True: 节省显存（所有进程共享1个模型），但推理串行，延迟高
@@ -92,7 +91,6 @@ class ProcessManager:
         self.devices = devices if devices else ['cuda:0']
         self.target_size = target_size
         self.process_fps = process_fps
-        self.tracker = tracker
         self.log_dir = logdir
         self.use_model_server = use_model_server
 
@@ -171,8 +169,7 @@ class ProcessManager:
                 model_weights=self.model_weights,
                 thermal_model_yaml=self.thermal_model_yaml,
                 thermal_model_weights=self.thermal_model_weights,
-                device=device,
-                tracker=self.tracker
+                device=device
             )
             # 关键：传递camera_keys和max_cameras
             model_server.start(camera_keys=assigned_cameras, max_cameras=max_cameras_per_gpu)
@@ -268,7 +265,7 @@ class ProcessManager:
                 args=(camera_config, selected_model_yaml, selected_model_weights,
                      assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
-                     config_queue, self.tracker, self.log_dir,
+                     config_queue, self.log_dir,
                      True, request_queue, response_queues_by_index, camera_to_index,
                      self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout,
                      self.tripwire_first_alarm_time, self.tripwire_tolerance_time),
@@ -286,7 +283,7 @@ class ProcessManager:
                 args=(camera_config, selected_model_yaml, selected_model_weights,
                      assigned_device, self.target_size, self.process_fps,
                      self.api_client.base_url, self.api_client.token,
-                     config_queue, self.tracker, self.log_dir,
+                     config_queue, self.log_dir,
                      False, None, None, None,
                      self.enable_adaptive_fps, self.fps_idle, self.fps_active, self.person_timeout,
                      self.tripwire_first_alarm_time, self.tripwire_tolerance_time),
@@ -378,7 +375,7 @@ class ProcessManager:
 def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
                  device: str, target_size: int, process_fps: float,
                  api_base_url: str, api_token: str,
-                 config_queue: Queue, tracker: str, log_dir: Path,
+                 config_queue: Queue, log_dir: Path,
                  use_model_server: bool = False,
                  request_queue=None, response_queues_by_index=None, camera_to_index=None,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
@@ -419,7 +416,6 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
         model_yaml = None
         model_weights = None
         device = None
-        tracker = None
 
     # 创建处理器
     processor = CameraProcessor(
@@ -432,7 +428,6 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
         api_base_url=api_base_url,
         api_token=api_token,
         config_queue=config_queue,
-        tracker=tracker,
         model_client=model_client,
         enable_adaptive_fps=enable_adaptive_fps,
         fps_idle=fps_idle,
@@ -481,9 +476,6 @@ def main():
                        help='YOLO检测目标尺寸')
     parser.add_argument('--process-fps', type=float, default=1.0,
                        help='每秒处理帧数（抽帧）')
-    parser.add_argument('--tracker', type=str, default='bytetrack',
-                       choices=['bytetrack', 'botsort'],
-                       help='跟踪器类型')
 
     # 性能优化
     parser.add_argument('--use-model-server', action='store_true', default=True,
@@ -558,7 +550,6 @@ def main():
         devices=args.devices,
         target_size=args.target_size,
         process_fps=args.process_fps,
-        tracker=args.tracker,
         logdir=log_dir,
         use_model_server=args.use_model_server,
         enable_adaptive_fps=args.enable_adaptive_fps,

@@ -144,7 +144,6 @@ class WaterSafetyRule(RuleEngine):
         self.rule_config = new_config
         self.sensitivity = new_config.get('sensitivity', 0.75)
         self.first_alarm_time = new_config.get('first_alarm_time', 1.0)
-        self.tolerance_time = 10.0
         self.repeated_alarm_time = new_config.get('repeated_alarm_time', 30.0)
         self.rois = new_config.get('roi_arrays', [])
         self.device_info = new_config.get('device_info', {})

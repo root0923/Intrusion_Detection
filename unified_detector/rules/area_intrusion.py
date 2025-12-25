@@ -146,7 +146,6 @@ class AreaIntrusionRule(RuleEngine):
         self.repeated_alarm_time = new_config.get('repeated_alarm_time', 30.0)
         self.rois = new_config.get('roi_arrays', [])
         self.device_info = new_config.get('device_info', {})
-        self.tolerance_time = 5.0
 
         # 重置状态
         self.reset()

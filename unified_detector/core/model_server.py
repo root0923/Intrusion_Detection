@@ -26,22 +26,20 @@ class ModelServer:
 
     def __init__(self, model_yaml: str, model_weights: str,
                  thermal_model_yaml: str, thermal_model_weights: str,
-                 device: str, tracker: str = 'bytetrack'):
+                 device: str):
         """
         Args:
             model_yaml: 可见光模型配置文件
             model_weights: 可见光模型权重文件
             thermal_model_yaml: 热成像模型配置文件
             thermal_model_weights: 热成像模型权重文件
-            device: 设备(cuda:0/cp)
-            tracker: 跟踪器类型
+            device: 设备(cuda:0/cuda:1)
         """
         self.model_yaml = model_yaml
         self.model_weights = model_weights
         self.thermal_model_yaml = thermal_model_yaml
         self.thermal_model_weights = thermal_model_weights
         self.device = device
-        self.tracker = tracker
 
         # 队列
         self.request_queue = None  # 推理请求队列
@@ -98,7 +96,7 @@ class ModelServer:
                   response_queues_by_index,
                   self.model_yaml, self.model_weights,
                   self.thermal_model_yaml, self.thermal_model_weights,
-                  self.device, self.tracker, 0),
+                  self.device, 0),
             daemon=True,
             name="ModelServer"
         )
@@ -215,7 +213,7 @@ class ModelServer:
                      response_queues_by_index: Dict,
                      model_yaml: str, model_weights: str,
                      thermal_model_yaml: str, thermal_model_weights: str,
-                     device: str, tracker: str, gpu_idx: int = 0):
+                     device: str, gpu_idx: int = 0):
         """服务器主循环（预留槽位方案）"""
         # 配置日志
         logging.basicConfig(
@@ -231,16 +229,19 @@ class ModelServer:
         # 维护camera_key → queue_index的映射表（子进程）
         camera_key_to_index = {}
 
-        # 加载两个模型
+        # 加载两个模型（可见光和热成像都用Detector支持批量推理）
         try:
-            from unified_detector.core.detector import UnifiedDetector
+            import sys
+            import os
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+            from detector import Detector
 
-            logger.info("正在加载可见光YOLO模型...")
-            detector_visible = UnifiedDetector(model_yaml, model_weights, device, tracker)
+            logger.info("正在加载可见光YOLO模型（批量推理模式）...")
+            detector_visible = Detector(model_yaml, model_weights, device)
             logger.info("✓ 可见光YOLO模型加载完成")
 
-            logger.info("正在加载热成像YOLO模型...")
-            detector_thermal = UnifiedDetector(thermal_model_yaml, thermal_model_weights, device, tracker)
+            logger.info("正在加载热成像YOLO模型（单帧推理模式）...")
+            detector_thermal = Detector(thermal_model_yaml, thermal_model_weights, device)
             logger.info("✓ 热成像YOLO模型加载完成")
 
         except Exception as e:
@@ -252,65 +253,59 @@ class ModelServer:
             'total_requests': 0,
             'successful': 0,
             'failed': 0,
-            'last_report_time': time.time()
+            'last_report_time': time.time(),
+            'batch_count': 0,
+            'batch_sizes': []
         }
 
+        # 批量推理配置
+        batch_size = 4
+        batch_timeout = 0.05  # 50ms
+        visible_batch = []
+        batch_start_time = None
+
         # 主循环
-        logger.info("开始监听推理请求和注册请求...")
+        logger.info("开始监听推理请求和注册请求（批量推理模式）...")
+        logger.info(f"批量推理配置: batch_size={batch_size}, timeout={batch_timeout*1000:.0f}ms")
 
-        while True:
+        def process_batch(batch):
+            """处理一个批次的可见光请求"""
+            if not batch:
+                return
+
+            stats['batch_count'] += 1
+            stats['batch_sizes'].append(len(batch))
+
             try:
-                # 1. 先处理注册队列（非阻塞）
-                try:
-                    while True:
-                        reg_msg = registration_queue.get_nowait()
-                        camera_key = reg_msg['camera_key']
-                        queue_index = reg_msg['queue_index']
+                # 提取图像和参数
+                frames = [req['frame'] for req in batch]
+                conf_threshold = batch[0]['conf_threshold']
+                iou_threshold = batch[0]['iou_threshold']
+                target_size = batch[0]['target_size']
 
-                        # 建立映射关系（不需要传递Queue对象）
-                        camera_key_to_index[camera_key] = queue_index
-                        logger.info(f"✓ 动态注册camera: {camera_key} → 槽位{queue_index}")
+                # 批量推理
+                batch_detections = detector_visible.detect_batch(
+                    frames, conf_threshold, iou_threshold, target_size
+                )
 
-                        # 发送确认消息
-                        registration_ack_queue.put({
-                            'camera_key': camera_key,
-                            'status': 'success'
+                # 分发结果（转换格式 'box' -> 'bbox'）
+                for i, req in enumerate(batch):
+                    client_id = req['client_id']
+                    detections = batch_detections[i]
+
+                    # 转换格式：'box' -> 'bbox'
+                    converted_detections = []
+                    for det in detections:
+                        converted_detections.append({
+                            'bbox': det['box'],
+                            'conf': det['conf'],
+                            'cls': det['cls']
                         })
-                except Empty:
-                    pass  # 注册队列为空，继续处理推理请求
 
-                # 2. 再获取推理请求（阻塞，超时1秒）
-                try:
-                    request = request_queue.get(timeout=1.0)
-                except Empty:
-                    continue
-
-                stats['total_requests'] += 1
-                client_id = request['client_id']
-
-                # 推理
-                try:
-                    frame = request['frame']
-                    conf_threshold = request['conf_threshold']
-                    iou_threshold = request['iou_threshold']
-                    target_size = request['target_size']
-                    model_type = request.get('model_type', 'visible')  # 'visible' 或 'thermal'
-
-                    # 根据模型类型选择对应的检测器
-                    if model_type == 'thermal':
-                        detector = detector_thermal
-                    else:
-                        detector = detector_visible
-
-                    # 执行检测（不带跟踪）
-                    detections = detector.detect(
-                        frame, conf_threshold, iou_threshold, target_size
-                    )
-
-                    # 发送响应（通过映射表查找队列）
+                    # 发送响应
                     response = {
                         'client_id': client_id,
-                        'detections': detections,
+                        'detections': converted_detections,
                         'timestamp': time.time()
                     }
 
@@ -327,15 +322,117 @@ class ModelServer:
                         logger.warning(f"[{client_id}] 客户端未注册")
                         stats['failed'] += 1
 
-                except Exception as e:
-                    logger.error(f"[{client_id}] 推理异常: {e}")
-                    stats['failed'] += 1
+            except Exception as e:
+                logger.error(f"批量推理异常: {e}", exc_info=True)
+                stats['failed'] += len(batch)
 
-                # 每30秒打印统计
+        while True:
+            try:
+                # 1. 先处理注册队列（非阻塞）
+                try:
+                    while True:
+                        reg_msg = registration_queue.get_nowait()
+                        camera_key = reg_msg['camera_key']
+                        queue_index = reg_msg['queue_index']
+
+                        camera_key_to_index[camera_key] = queue_index
+                        logger.info(f"✓ 动态注册camera: {camera_key} → 槽位{queue_index}")
+
+                        registration_ack_queue.put({
+                            'camera_key': camera_key,
+                            'status': 'success'
+                        })
+                except Empty:
+                    pass
+
+                # 2. 检查是否需要处理积累的批次（超时）
+                if visible_batch and batch_start_time:
+                    elapsed = time.time() - batch_start_time
+                    if elapsed >= batch_timeout:
+                        process_batch(visible_batch)
+                        visible_batch = []
+                        batch_start_time = None
+
+                # 3. 获取推理请求（非阻塞或短超时）
+                try:
+                    timeout = 0.01 if not visible_batch else max(0.001, batch_timeout - (time.time() - batch_start_time))
+                    request = request_queue.get(timeout=timeout)
+                except Empty:
+                    # 队列为空，检查是否有未处理的批次
+                    if visible_batch and (time.time() - batch_start_time) >= batch_timeout:
+                        process_batch(visible_batch)
+                        visible_batch = []
+                        batch_start_time = None
+                    continue
+
+                stats['total_requests'] += 1
+                model_type = request.get('model_type', 'visible')
+
+                # 4. 根据模型类型处理
+                if model_type == 'thermal':
+                    # 热成像：单独推理
+                    client_id = request['client_id']
+                    try:
+                        frame = request['frame']
+                        conf_threshold = request['conf_threshold']
+                        iou_threshold = request['iou_threshold']
+                        target_size = request['target_size']
+
+                        detections = detector_thermal.detect(
+                            frame, conf_thresh=conf_threshold,
+                            iou_thresh=iou_threshold, target_size=target_size
+                        )
+
+                        # 转换格式：'box' -> 'bbox'
+                        converted_detections = []
+                        for det in detections:
+                            converted_detections.append({
+                                'bbox': det['box'],
+                                'conf': det['conf'],
+                                'cls': det['cls']
+                            })
+
+                        response = {
+                            'client_id': client_id,
+                            'detections': converted_detections,
+                            'timestamp': time.time()
+                        }
+
+                        queue_index = camera_key_to_index.get(client_id)
+                        if queue_index is not None:
+                            response_queue = response_queues_by_index[queue_index]
+                            try:
+                                response_queue.put_nowait(response)
+                                stats['successful'] += 1
+                            except:
+                                logger.warning(f"[{client_id}] 响应队列已满")
+                                stats['failed'] += 1
+                        else:
+                            logger.warning(f"[{client_id}] 客户端未注册")
+                            stats['failed'] += 1
+
+                    except Exception as e:
+                        logger.error(f"[{client_id}] 热成像推理异常: {e}")
+                        stats['failed'] += 1
+
+                else:
+                    # 可见光：加入批次
+                    visible_batch.append(request)
+                    if batch_start_time is None:
+                        batch_start_time = time.time()
+
+                    # 批次满了，立即处理（严格限制：只处理前batch_size个，防止显存溢出）
+                    if len(visible_batch) >= batch_size:
+                        process_batch(visible_batch[:batch_size])
+                        visible_batch = visible_batch[batch_size:]  # 保留超出的部分到下一批
+                        batch_start_time = time.time() if visible_batch else None
+
+                # 5. 每30秒打印统计
                 if time.time() - stats['last_report_time'] > 30:
+                    avg_batch_size = sum(stats['batch_sizes']) / len(stats['batch_sizes']) if stats['batch_sizes'] else 0
                     logger.info(f"统计: 总请求={stats['total_requests']}, "
-                               f"成功={stats['successful']}, "
-                               f"失败={stats['failed']}, "
+                               f"成功={stats['successful']}, 失败={stats['failed']}, "
+                               f"批次数={stats['batch_count']}, 平均batch_size={avg_batch_size:.1f}, "
                                f"队列长度={request_queue.qsize()}")
                     stats['last_report_time'] = time.time()
 

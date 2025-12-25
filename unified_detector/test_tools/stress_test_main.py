@@ -113,7 +113,6 @@ def camera_worker(camera_config, model_yaml, model_weights,
         api_base_url=api_base_url,
         api_token=api_token,
         config_queue=config_queue,
-        tracker=tracker,
         model_client=model_client
     )
     processor.start()
@@ -283,8 +282,7 @@ def main():
                 model_weights=args.weights,
                 thermal_model_yaml=args.thermal_model_yaml,
                 thermal_model_weights=args.thermal_weights,
-                device=device,
-                tracker=args.tracker
+                device=device
             )
             # 传递camera_keys，让ModelServer在启动前创建响应队列
             model_server.start(camera_keys=assigned_cameras)

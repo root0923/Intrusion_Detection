@@ -5,6 +5,7 @@
 - 测试 unified_detector 框架中的 AreaIntrusionRule
 - 使用本地 ROI 配置文件
 - 不依赖后端API，纯本地测试
+- 使用 detect() 方法（不需要跟踪）
 """
 import sys
 import os
@@ -91,7 +92,6 @@ def main():
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
     model_weights = "data/LLVIP-yolo11m-e300-16-pretrained.pt"
     device = "cuda:0"  # 或 "cpu"
-    tracker = "bytetrack"
     target_size = 800
     conf_threshold = 0.25
 
@@ -132,7 +132,7 @@ def main():
 
     # 5. 初始化检测器
     print(f"\n[4/6] 初始化YOLO检测器...")
-    detector = UnifiedDetector(model_yaml, model_weights, device, tracker)
+    detector = UnifiedDetector(model_yaml, model_weights, device)  # tracker参数有默认值
     print("✓ 检测器初始化完成")
 
     # 6. 初始化规则引擎
@@ -165,9 +165,9 @@ def main():
 
             # 每隔process_interval帧处理一次
             if (frame_count - 1) % process_interval == 0:
-                # 检测和跟踪
+                # 检测（不需要跟踪）
                 detect_start_time = time.time()
-                detections = detector.detect_and_track(
+                detections = detector.detect(
                     frame,
                     conf_threshold=conf_threshold,
                     iou_threshold=0.7,
@@ -228,7 +228,10 @@ def main():
                 # 重置规则状态
                 rule.reset()
                 print("✓ 规则状态已重置")
-        print(sum(times) / len(times) if times else 0)
+
+        if times:
+            avg_time = sum(times) / len(times)
+            print(f"\n✓ 平均推理+规则处理时间: {avg_time:.2f}ms")
 
     except KeyboardInterrupt:
         print("\n\n用户中断")
