@@ -428,26 +428,26 @@ def parse_arguments():
     
     # 模型参数
     parser.add_argument('--yaml', type=str, 
-                       default='ultralytics/cfg/models/11/yolo11n.yaml',
+                       default='ultralytics/cfg/models/11/yolo11m.yaml',
                        help='模型YAML配置文件路径')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP_IF-yolo11n-e300-16-pretrained-.pt',
+                       default='runs/finetuneNegV2/lake-yolo11m-finetuneNegV22/weights/epoch60.pt',
                        help='模型权重文件路径')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='设备 (cuda:0 或 cpu)')
     
     # 检测参数
-    parser.add_argument('--conf', type=float, default=0.25,
+    parser.add_argument('--conf', type=float, default=0.65,
                        help='置信度阈值')
     parser.add_argument('--iou', type=float, default=0.7,
                        help='IOU阈值')
-    parser.add_argument('--size', type=int, default=736,
+    parser.add_argument('--size', type=int, default=800,
                        help='检测尺寸')
     parser.add_argument('--fps-target', type=int, default=5,
                        help='目标检测帧率(每秒检测帧数)')
     
     # 输入源参数
-    parser.add_argument('--input', type=str, default=r'data\dataset\video_IR\test3.mp4',
+    parser.add_argument('--input', type=str, default='data/test_visible_neg.mp4',
                        help='输入源: 视频文件路径')
     
     # 处理参数
@@ -455,7 +455,7 @@ def parse_arguments():
                        help='最大处理帧数 (0表示无限制)')
     
     # 输出参数
-    parser.add_argument('--output', type=str, default='',
+    parser.add_argument('--output', type=str, default='data/output/test_visible_neg2_60.mp4',
                        help='输出视频路径 (不指定则自动生成)')
     parser.add_argument('--no-display', action='store_true',
                        help='不显示实时画面')

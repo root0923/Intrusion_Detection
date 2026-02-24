@@ -182,4 +182,6 @@ calibration_*.npy
 /val2.py
 
 /CLAUDE.md
-# /data
+/data
+/extracted_frames
+/labels
