@@ -1,9 +1,9 @@
 """
-测试新的绊线入侵规则 - Test Tripwire Intrusion Rule
+测试绊线入侵规则 - Test Tripwire Intrusion Rule
 
 功能：
 - 测试 unified_detector 框架中的 TripwireRule
-- 使用本地绊线配置文件
+- 使用本地绊线配置文件（通过 coordinate_tool.py 生成）
 - 不依赖后端API，纯本地测试
 """
 import sys
@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
     datefmt='%H:%M:%S'
 )
@@ -37,8 +37,9 @@ def load_tripwire_config(config_path: str):
         config = json.load(f)
 
     print(f"✓ 加载绊线配置: {len(config['tripwires'])} 条绊线")
+    print(f"  配置尺寸: {config['image_width']}x{config['image_height']}")
     for tw in config['tripwires']:
-        print(f"  - {tw['id']}: {tw['direction']}, cooldown={tw['alert_cooldown']}s")
+        print(f"  - {tw['id']}: {tw.get('direction', 'double-direction')}")
 
     return config
 
@@ -65,12 +66,16 @@ def create_rule_config(tripwire_lines, actual_width, actual_height, direction='d
     """创建规则配置（模拟API返回的配置格式）"""
     rule_config = {
         'enabled': True,
-        'sensitivity': 0.45,  # 对应前端sensitivity=5
-        'repeated_alarm_time': repeated_alarm_time,  # 测试用，10秒重复报警间隔
-        'direction': direction,  # 'left-to-right', 'right-to-left', 'double-direction'
+        'sensitivity': 0.65,
+        'repeated_alarm_time': repeated_alarm_time,
+        'direction': direction,
         'frontend_width': actual_width,
         'frontend_height': actual_height,
-        'tripwire_arrays': tripwire_lines,  # 转换后的绊线坐标
+        'tripwire_arrays': tripwire_lines,
+        'enable_static_filter': True,
+        'enable_parallel_filter': True,
+        'static_threshold': 15.0,
+        'parallel_slope_threshold': 0.1,
         'device_info': {
             'device_id': 'test_device',
             'device_name': '测试摄像头',
@@ -88,19 +93,14 @@ def main():
     print("=" * 60)
 
     # 1. 配置参数
-    tripwire_config_path = "tripwire_intrusion/config_line.json"
-    video_source = r"data\dataset\video_IR\test3.mp4"  # 0=摄像头, 或者视频文件路径
+    tripwire_config_path = "tripwire_intrusion/tripwire_config.json"
+    video_source = "data/test_v.mp4"
 
-    # 假设配置文件中的坐标是基于640x480的
-    config_width = 640
-    config_height = 480
-
-    model_yaml = "ultralytics/cfg/models/11/yolo11x.yaml"
-    model_weights = "data/LLVIP_IF-yolo11x-e300-16-pretrained.pt"
-    device = "cuda:0"  # 或 "cpu"
+    model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
+    model_weights = "runs/finetune_V_2classes/lake-yolo11m-finetune_V_2classes/weights/last.pt"
+    device = "cuda:0"
     tracker = "bytetrack"
     target_size = 800
-    conf_threshold = 0.25
 
     # 2. 加载绊线配置
     print("\n[1/6] 加载绊线配置...")
@@ -131,8 +131,8 @@ def main():
     print(f"\n[3/6] 转换绊线坐标...")
     converted_lines = convert_tripwires_to_actual_size(
         tripwire_config['tripwires'],
-        config_width,
-        config_height,
+        tripwire_config['image_width'],
+        tripwire_config['image_height'],
         actual_width,
         actual_height
     )
@@ -144,14 +144,19 @@ def main():
 
     # 6. 初始化规则引擎
     print(f"\n[5/6] 初始化绊线入侵规则...")
+
+    # 从配置文件中读取方向（所有绊线共享同一个方向）
+    direction = tripwire_config['tripwires'][0].get('direction', 'double-direction') if tripwire_config['tripwires'] else 'double-direction'
+
     rule_config = create_rule_config(
         converted_lines,
         actual_width,
         actual_height,
-        direction='double-direction',  # 可以改成 'left-to-right' 或 'right-to-left'
-        repeated_alarm_time=1.0
+        direction=direction,
+        repeated_alarm_time=0.0
     )
-    rule = TripwireRule(rule_config, camera_key="test_camera")
+    rule = TripwireRule(rule_config, camera_key="test_camera",
+                        first_alarm_time=0.0, tolerance_time=1.5)
 
     # 设置图像高度（用于坐标系转换）
     rule.monitor.set_image_height(actual_height)
@@ -159,15 +164,23 @@ def main():
     print("✓ 规则引擎初始化完成")
     print(f"  - Sensitivity: {rule.sensitivity}")
     print(f"  - Direction: {rule.direction}")
+    print(f"  - First alarm time: {rule.first_alarm_time}s")
+    print(f"  - Tolerance time: {rule.tolerance_time}s")
     print(f"  - Repeated alarm time: {rule.repeated_alarm_time}s")
+    print(f"  - Static filter: {rule.enable_static_filter} (threshold: {rule.static_threshold}px)")
+    print(f"  - Parallel filter: {rule.enable_parallel_filter} (threshold: {rule.parallel_slope_threshold})")
     print(f"  - Tripwire lines: {len(converted_lines)}")
 
     # 7. 主循环
     print(f"\n[6/6] 开始处理循环...")
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
+    # 创建输出目录
+    output_dir = Path("runs/tripwire")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     frame_count = 0
-    process_interval = 5 
+    process_interval = 25
     times = []
 
     try:
@@ -183,18 +196,18 @@ def main():
             # 每隔process_interval帧处理一次
             if (frame_count - 1) % process_interval == 0:
                 # 检测和跟踪（必须开启跟踪）
-                time_1 = time.time()
+                detect_start_time = time.time()
                 detections = detector.detect_and_track(
                     frame,
-                    conf_threshold=conf_threshold,
+                    conf_threshold=0.25,
                     iou_threshold=0.7,
                     target_size=target_size
                 )
 
                 # 规则处理
                 alarm_info = rule.process(frame, detections, current_time)
-                time2 = time.time()
-                times.append((time2 - time_1)* 1000)
+                detect_elapsed_ms = (time.time() - detect_start_time) * 1000
+                times.append(detect_elapsed_ms)
 
                 # 可视化
                 vis_frame = frame.copy()
@@ -204,11 +217,10 @@ def main():
 
                 # 绘制检测框和轨迹
                 vis_frame = draw_detections(vis_frame, detections, conf_threshold=rule.sensitivity,
-                                           class_names={0: 'person'})
+                                           class_names={0: 'person', 1: 'duck'})
 
                 # 绘制轨迹
                 for track_id, track in rule.track_history.items():
-                    # 绘制轨迹点
                     trajectory = list(track.trajectory)
                     if len(trajectory) > 1:
                         for i in range(len(trajectory) - 1):
@@ -223,22 +235,22 @@ def main():
 
                 # 如果有报警，显示报警信息
                 if alarm_info:
-                    vis_frame = draw_alarm_text(vis_frame, "TRIPWIRE CROSSED!")
+                    vis_frame = draw_alarm_text(vis_frame, "ALARM TRIGGERED!")
+
                     # 手动更新报警时间（测试中没有真实API）
                     rule.last_alarm_time = current_time
                     base64_image = alarm_info.get('alarmPicture', '')
-                    #保存报警截图
+                    # 保存报警截图
                     image_data = cv2.imdecode(
                         np.frombuffer(base64.b64decode(base64_image), np.uint8),
                         cv2.IMREAD_COLOR
                     )
-                    alarm_image_path = f"runs/tripwire_new/alarm_{frame_count}.jpg"
-                    cv2.imwrite(alarm_image_path, image_data)
+                    alarm_image_path = output_dir / f"alarm_{frame_count}.jpg"
+                    cv2.imwrite(str(alarm_image_path), image_data)
 
                 # 显示图像
-                cv2.imshow('Tripwire Test', vis_frame)
+                cv2.imshow('Tripwire Intrusion Test', vis_frame)
 
-            
             # 按键处理
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -246,14 +258,16 @@ def main():
                 break
             elif key == ord('s'):
                 # 截图
-                screenshot_path = f"screenshot_tripwire_{int(time.time())}.jpg"
+                screenshot_path = f"screenshot_{int(time.time())}.jpg"
                 cv2.imwrite(screenshot_path, vis_frame)
                 print(f"✓ 截图保存: {screenshot_path}")
             elif key == ord('r'):
                 # 重置规则状态
                 rule.reset()
                 print("✓ 规则状态已重置")
-        print(sum(times)/len(times) if times else 0)
+
+        print(f"\n平均检测时间: {sum(times) / len(times):.2f}ms" if times else "无检测数据")
+
     except KeyboardInterrupt:
         print("\n\n用户中断")
 
@@ -261,7 +275,6 @@ def main():
         # 清理
         cap.release()
         cv2.destroyAllWindows()
-        print("\n✓ 测试结束")
 
 
 if __name__ == '__main__':

@@ -47,23 +47,23 @@ def clean_and_create_labels(extracted_frames_dir, labels_dir):
             os.remove(txt_file)
             print(f"Removed redundant label file: {txt_file}")
     
-    # 找出extracted_frames中有图片但labels中缺少txt文件的情况
-    missing_labels = image_files - label_files
-    print(f"Found {len(missing_labels)} missing label files")
+    # # 找出extracted_frames中有图片但labels中缺少txt文件的情况
+    # missing_labels = image_files - label_files
+    # print(f"Found {len(missing_labels)} missing label files")
     
-    # 创建缺失的空txt文件
-    for image_name in missing_labels:
-        txt_file = os.path.join(labels_dir, f"{image_name}.txt")
-        with open(txt_file, 'w') as f:
-            # 创建空文件作为负样本标记
-            pass
-        print(f"Created empty label file: {txt_file}")
+    # # 创建缺失的空txt文件
+    # for image_name in missing_labels:
+    #     txt_file = os.path.join(labels_dir, f"{image_name}.txt")
+    #     with open(txt_file, 'w') as f:
+    #         # 创建空文件作为负样本标记
+    #         pass
+    #     print(f"Created empty label file: {txt_file}")
     
     print("Processing completed!")
 
 
 if __name__ == "__main__":
-    extracted_frames_path = "/home/ysy/object_detection/intrusion/Intrusion_Detection/extracted_frames"
-    labels_path = "/home/ysy/object_detection/intrusion/Intrusion_Detection/labels"
+    extracted_frames_path = "/home/ysy/object_detection/intrusion/Intrusion_Detection/data/dataset/with_neg/images/train"
+    labels_path = "/home/ysy/object_detection/intrusion/Intrusion_Detection/data/dataset/with_neg/labels/train"
     
     clean_and_create_labels(extracted_frames_path, labels_path)

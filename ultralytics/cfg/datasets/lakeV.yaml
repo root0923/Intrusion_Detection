@@ -1,0 +1,10 @@
+# 数据集路径
+path: /home/ysy/object_detection/intrusion/Intrusion_Detection/data/dataset/with_neg
+train: images/train
+val: images/val
+
+# 类别数量
+nc: 2 
+
+# 类别名称
+names: ['person', 'duck']

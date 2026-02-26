@@ -84,6 +84,12 @@ class TripwireRule(RuleEngine):
         self.first_alarm_time = self._first_alarm_time
         self.tolerance_time = self._tolerance_time
 
+        # 过滤规则配置
+        self.enable_static_filter = self.rule_config.get('enable_static_filter', True)
+        self.enable_parallel_filter = self.rule_config.get('enable_parallel_filter', True)
+        self.static_threshold = self.rule_config.get('static_threshold', 15.0)
+        self.parallel_slope_threshold = self.rule_config.get('parallel_slope_threshold', 0.1)
+
         # Track管理
         self.track_history = {}  # {track_id: Track对象}
         self.track_last_seen = {}  # {track_id: 最后出现的帧号}
@@ -95,7 +101,8 @@ class TripwireRule(RuleEngine):
 
         logger.debug(f"[{self.camera_key}] 绊线入侵规则初始化: 绊线数={len(self.tripwire_lines)}, "
                     f"sensitivity={self.sensitivity:.2f}, direction={self.direction}, "
-                    f"first_alarm_time={self.first_alarm_time}s, tolerance_time={self.tolerance_time}s")
+                    f"first_alarm_time={self.first_alarm_time}s, tolerance_time={self.tolerance_time}s, "
+                    f"static_filter={self.enable_static_filter}, parallel_filter={self.enable_parallel_filter}")
 
     def _init_tripwire_monitor(self):
         """初始化TripwireMonitor"""
@@ -120,12 +127,16 @@ class TripwireRule(RuleEngine):
         with open(self.temp_config_path, 'w', encoding='utf-8') as f:
             json.dump(temp_config, f, indent=2)
 
-        # 初始化TripwireMonitor（使用全局冷却时间、首次报警时间和容忍时间）
+        # 初始化TripwireMonitor（使用全局冷却时间、首次报警时间、容忍时间和过滤配置）
         self.monitor = TripwireMonitor(
             str(self.temp_config_path),
             global_cooldown=self.repeated_alarm_time,
             first_alarm_time=self.first_alarm_time,
-            tolerance_time=self.tolerance_time
+            tolerance_time=self.tolerance_time,
+            enable_static_filter=self.enable_static_filter,
+            enable_parallel_filter=self.enable_parallel_filter,
+            static_threshold=self.static_threshold,
+            parallel_slope_threshold=self.parallel_slope_threshold
         )
 
         logger.debug(f"[{self.camera_key}] TripwireMonitor初始化完成")
@@ -147,7 +158,10 @@ class TripwireRule(RuleEngine):
 
         self.frame_count += 1
 
-        # 1. 过滤置信度
+        # 1. 只处理 person（类别0），过滤掉其他类别
+        detections = [d for d in detections if d.get('cls') == 0]
+
+        # 2. 过滤置信度
         valid_detections = self.filter_by_confidence(detections)
 
         # 2. 转换为Track对象并更新轨迹
@@ -186,7 +200,7 @@ class TripwireRule(RuleEngine):
             if track_id in self.track_last_seen:
                 del self.track_last_seen[track_id]
 
-        # 4. 调用TripwireMonitor检测越线
+        # 4. 调用TripwireMonitor检测越线（内部会进行过滤判断）
         events = self.monitor.update(current_tracks)
 
         # 5. 处理报警（TripwireMonitor内部已处理全局冷却）
@@ -256,6 +270,12 @@ class TripwireRule(RuleEngine):
         self.direction = new_config.get('direction', 'double-direction')
         self.tripwire_lines = new_config.get('tripwire_arrays', [])
         self.device_info = new_config.get('device_info', {})
+
+        # 更新过滤规则配置
+        self.enable_static_filter = new_config.get('enable_static_filter', True)
+        self.enable_parallel_filter = new_config.get('enable_parallel_filter', True)
+        self.static_threshold = new_config.get('static_threshold', 15.0)
+        self.parallel_slope_threshold = new_config.get('parallel_slope_threshold', 0.1)
 
         # 重置状态
         self.reset()

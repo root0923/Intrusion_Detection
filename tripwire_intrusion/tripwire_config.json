@@ -1,0 +1,27 @@
+{
+  "image_width": 1920,
+  "image_height": 1080,
+  "tripwires": [
+    {
+      "id": "line_1",
+      "points": [
+        [
+          10,
+          274
+        ],
+        [
+          1914,
+          177
+        ]
+      ],
+      "direction": "left-to-right",
+      "enabled": true,
+      "alert_cooldown": 2.0,
+      "color": [
+        0,
+        255,
+        0
+      ]
+    }
+  ]
+}

@@ -8,7 +8,7 @@ if __name__ == '__main__':
 
     # 微调训练配置
     model.train(
-        data='ultralytics/cfg/datasets/lake.yaml',  # 数据集配置
+        data='ultralytics/cfg/datasets/lakeV.yaml',  # 数据集配置
 
         # 图像设置
         imgsz=800,
@@ -44,8 +44,8 @@ if __name__ == '__main__':
         save_period=10,  # 每10轮保存一次
 
         # 输出目录
-        project='runs/finetuneNegV2',
-        name='lake-yolo11m-finetuneNegV2',
+        project='runs/finetune_V_2classes',
+        name='lake-yolo11m-finetune_V_2classes',
         exist_ok=False,  # 如果目录存在是否覆盖
 
         # 其他可选参数

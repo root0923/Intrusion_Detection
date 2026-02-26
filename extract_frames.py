@@ -78,7 +78,7 @@ def main():
                         help="输入的MP4视频文件路径")
     parser.add_argument("--output", "-o", type=str, default="./extracted_frames", 
                         help="输出图片保存目录 (默认: ./extracted_frames)")
-    parser.add_argument("--fps", "-f", type=int, default=3, 
+    parser.add_argument("--fps", "-f", type=int, default=0.5, 
                         help="每秒提取的帧数 (默认: 1，即每秒1帧)")
     
     args = parser.parse_args()

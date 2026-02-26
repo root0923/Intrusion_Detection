@@ -9,10 +9,10 @@ from pathlib import Path
 
 if __name__ == "__main__":
     # 源文件
-    epoch30_path = Path("runs/finetuneNegV2/lake-yolo11m-finetuneNegV22/weights/epoch60.pt")
+    epoch30_path = Path("runs/finetuneNegIR2/lake-yolo11m-finetuneNegIR2/weights/epoch30.pt")
 
     # 输出文件（可选，如果不指定则覆盖原文件）
-    output_path = Path("runs/finetuneNegV2/lake-yolo11m-finetuneNegV22/weights/epoch60.pt")
+    output_path = Path("runs/finetuneNegIR2/lake-yolo11m-finetuneNegIR2/weights/epoch30.pt")
 
     print(f"正在处理 {epoch30_path}...")
     print("从 EMA 中提取模型并优化...")

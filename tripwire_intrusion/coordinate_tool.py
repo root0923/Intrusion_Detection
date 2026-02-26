@@ -24,25 +24,32 @@ class CoordinateTool:
         self.tripwires = []
         self.current_points = []
         self.global_direction = "double-direction"  # 全局方向设置
-        self.window_name = 'Coordinate Tool'
+        # 使用英文窗口名以避免Qt/OpenCV的Unicode bug
+        self.window_name = 'Tripwire Coordinate Tool (Press S to Save, Q to Quit)'
 
     def load_frame(self):
         """加载第一帧"""
         if Path(self.source).exists():
             cap = cv2.VideoCapture(self.source)
         else:
-            cap = cv2.VideoCapture(int(self.source))
+            try:
+                cap = cv2.VideoCapture(int(self.source))
+            except ValueError:
+                raise ValueError(f"无效的视频源: {self.source}")
 
         if not cap.isOpened():
             raise ValueError(f"无法打开视频源: {self.source}")
 
         ret, self.frame = cap.read()
-        cap.release()
-
         if not ret:
+            cap.release()
             raise ValueError("无法读取视频帧")
 
-        print(f"✓ 加载视频帧: {self.frame.shape[1]}x{self.frame.shape[0]}")
+        height, width = self.frame.shape[:2]
+        cap.release()
+
+        print(f"✓ 视频信息: {width}x{height}")
+        return width, height
 
     def mouse_callback(self, event, x, y, flags, param):
         """鼠标回调 - 连续绊线模式"""
@@ -150,9 +157,26 @@ class CoordinateTool:
 
     def run(self):
         """运行标定工具"""
-        self.load_frame()
+        width, height = self.load_frame()
 
-        cv2.namedWindow(self.window_name)
+        # 调试: 检查frame是否有效
+        print(f"DEBUG: Frame shape: {self.frame.shape}, dtype: {self.frame.dtype}")
+
+        # 不使用startWindowThread，直接创建窗口
+        print(f"DEBUG: Creating window: {self.window_name}")
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+
+        # 显示初始图像
+        print("DEBUG: Showing image")
+        display = self._draw_display()
+        cv2.imshow(self.window_name, display)
+
+        # 多次刷新窗口以确保完全初始化
+        print("DEBUG: Refreshing window")
+        for i in range(5):
+            cv2.waitKey(100)
+
+        print("DEBUG: Setting mouse callback")
         cv2.setMouseCallback(self.window_name, self.mouse_callback)
 
         print("\n" + "=" * 60)
@@ -181,7 +205,7 @@ class CoordinateTool:
 
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord('q'):
+            if key == ord('q') or key == 27:  # q或ESC
                 print("\n退出")
                 break
 
@@ -194,34 +218,30 @@ class CoordinateTool:
                 self._set_direction()
 
             elif key == ord('s'):
-                self._save_config()
+                self._save_config(width, height)
 
         cv2.destroyAllWindows()
 
-    def _save_config(self):
+    def _save_config(self, width, height):
         """保存配置"""
         if not self.tripwires:
             print("\n✗ 没有绊线可保存\n")
             return
 
-        # 询问是否使用默认路径
-        print(f"\n默认保存路径: {self.output_path}")
-        user_input = input("按Enter使用默认路径，或输入新路径: ").strip()
+        config = {
+            "image_width": width,
+            "image_height": height,
+            "tripwires": self.tripwires
+        }
 
-        if user_input:
-            output_path = user_input
-        else:
-            output_path = self.output_path
-
-        config = {"tripwires": self.tripwires}
-
-        output_file = Path(output_path)
+        output_file = Path(self.output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
 
         print(f"\n✓ 配置已保存到: {output_file.absolute()}")
+        print(f"  图像尺寸: {width}x{height}")
         print(f"  连续折线: 共 {len(self.tripwires)} 条线段")
         print(f"  整体方向: {self.global_direction}")
         print("")
@@ -239,12 +259,7 @@ class CoordinateTool:
 
         print(f"\n  方向规则: {direction_cn}")
         print(f"\n下一步: 使用此配置运行检测")
-        print(f"  python tripwire_intrusion/tripwire_detector.py \\")
-        print(f"      --source <your_video.mp4> \\")
-        print(f"      --weights <your_model.pt> \\")
-        print(f"      --config {output_file} \\")
-        print(f"      --tracker bytetrack \\")
-        print(f"      --show --save\n")
+        print(f"  python test_tripwire.py\n")
 
 
 def parse_args():
@@ -252,8 +267,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='绊线坐标标定工具')
     parser.add_argument('--source', type=str, required=True,
                        help='视频路径或摄像头ID (0, 1, ...)')
-    parser.add_argument('--output', type=str, default='tripwire_intrusion/config_line.json',
-                       help='输出配置文件路径 (默认: tripwire_config.json)')
+    parser.add_argument('--output', type=str, default='tripwire_intrusion/tripwire_config.json',
+                       help='输出配置文件路径 (默认: tripwire_intrusion/tripwire_config.json)')
     return parser.parse_args()
 
 

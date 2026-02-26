@@ -134,6 +134,12 @@ class ConfigParser:
         frontend_width = int(rule.get('width', 1920))
         frontend_height = int(rule.get('height', 1080))
 
+        # 过滤规则配置（硬编码）
+        enable_static_filter = True
+        enable_parallel_filter = True
+        static_threshold = 15.0
+        parallel_slope_threshold = 0.1
+
         # 解析ROI点位
         roi_list = []
         algorithm_rule_points = rule.get('algorithmRulePoints', [])
@@ -165,6 +171,11 @@ class ConfigParser:
             'frontend_width': frontend_width,
             'frontend_height': frontend_height,
             'roi_list': roi_list,  # 前端坐标，后续需要转换
+            # 过滤规则配置
+            'enable_static_filter': enable_static_filter,
+            'enable_parallel_filter': enable_parallel_filter,
+            'static_threshold': static_threshold,
+            'parallel_slope_threshold': parallel_slope_threshold,
             'device_info': {
                 'deviceId': camera_config['device_id'],
                 'deviceName': camera_config['device_name'],
@@ -193,6 +204,12 @@ class ConfigParser:
         direction = rule.get('direction', 'double-direction')
         frontend_width = int(rule.get('width', 1920))
         frontend_height = int(rule.get('height', 1080))
+
+        # 过滤规则配置（硬编码）
+        enable_static_filter = True
+        enable_parallel_filter = True
+        static_threshold = 15.0
+        parallel_slope_threshold = 0.1
 
         logger.debug(direction)
 
@@ -226,6 +243,11 @@ class ConfigParser:
             'frontend_width': frontend_width,
             'frontend_height': frontend_height,
             'tripwire_lines': tripwire_lines,  # 前端坐标，后续需要转换
+            # 过滤规则配置
+            'enable_static_filter': enable_static_filter,
+            'enable_parallel_filter': enable_parallel_filter,
+            'static_threshold': static_threshold,
+            'parallel_slope_threshold': parallel_slope_threshold,
             'device_info': {
                 'deviceId': camera_config['device_id'],
                 'deviceName': camera_config['device_name'],
@@ -254,6 +276,12 @@ class ConfigParser:
         repeated_alarm_time = float(rule.get('repeatedAlarmTime', 30.0))
         frontend_width = int(rule.get('width', 1920))
         frontend_height = int(rule.get('height', 1080))
+
+        # 过滤规则配置（硬编码）
+        enable_static_filter = True
+        enable_parallel_filter = True
+        static_threshold = 15.0
+        parallel_slope_threshold = 0.1
 
         # 解析ROI点位
         roi_list = []
@@ -285,6 +313,11 @@ class ConfigParser:
             'frontend_width': frontend_width,
             'frontend_height': frontend_height,
             'roi_list': roi_list,
+            # 过滤规则配置
+            'enable_static_filter': enable_static_filter,
+            'enable_parallel_filter': enable_parallel_filter,
+            'static_threshold': static_threshold,
+            'parallel_slope_threshold': parallel_slope_threshold,
             'device_info': {
                 'deviceId': camera_config['device_id'],
                 'deviceName': camera_config['device_name'],

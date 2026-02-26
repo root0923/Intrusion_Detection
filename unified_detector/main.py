@@ -37,7 +37,7 @@ def setup_logging(log_dir: Path):
 
     # 配置日志
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
@@ -119,23 +119,6 @@ class ProcessManager:
         self.response_queues_list = []  # 每个ModelServer的响应队列字典
 
         self.logger = logging.getLogger(__name__)
-
-        # 日志输出GPU配置
-        self.logger.info(f"使用 {len(self.devices)} 个GPU设备: {self.devices}")
-
-        # 日志输出动态帧率配置
-        if self.enable_adaptive_fps:
-            self.logger.info(f"动态帧率已启用（仅对绊线入侵规则生效）")
-            self.logger.info(f"  空闲帧率: {self.fps_idle}fps")
-            self.logger.info(f"  活跃帧率: {self.fps_active}fps")
-            self.logger.info(f"  人员超时: {self.person_timeout}秒")
-
-        # ModelServer模式下，延迟启动（需要先知道camera配置）
-        if not self.use_model_server:
-            self.logger.info("使用多进程独立模型模式（每个进程加载独立模型）")
-            self.logger.info("  优点：推理并行，延迟低")
-            self.logger.info("  缺点：GPU显存占用大（每路约1-2GB）")
-            self.logger.info(f"  进程将在 {len(self.devices)} 个GPU上平均分配")
 
     def start_model_servers_with_cameras(self, camera_configs: Dict, max_cameras_per_gpu: int = 50):
         """
@@ -388,7 +371,7 @@ def camera_worker(camera_config: Dict, model_yaml: str, model_weights: str,
     log_file = log_dir / f"unified_detector_{datetime.now().strftime('%Y%m%d')}.log"
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
@@ -502,7 +485,7 @@ def main():
     # 绊线入侵首次报警时间（避免启动时误报）
     parser.add_argument('--tripwire-first-alarm-time', type=float, default=2.0,
                        help='绊线入侵首次报警时间（秒），目标持续在危险侧多久后才报警，避免启动时误报（默认10秒）')
-    parser.add_argument('--tripwire-tolerance-time', type=float, default=5.0,
+    parser.add_argument('--tripwire-tolerance-time', type=float, default=15.0,
                        help='绊线入侵容忍时间（秒），目标短暂消失后多久重置状态（默认3秒）')
 
     # 配置更新

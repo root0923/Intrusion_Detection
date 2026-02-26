@@ -100,9 +100,28 @@ class VideoROISelector:
         Returns:
             List[List[Tuple]]: ROI列表，每个ROI是顶点坐标列表
         """
-        window_name = "ROI区域标定 (ESC退出)"
+        # 使用英文窗口名以避免Qt/OpenCV的Unicode bug
+        window_name = "ROI Selection Tool (Press S to Save, Q to Quit)"
+
+        # 调试: 检查frame是否有效
+        print(f"DEBUG: Frame shape: {self.frame.shape}, dtype: {self.frame.dtype}")
+        print(f"DEBUG: Clone shape: {self.clone.shape}, dtype: {self.clone.dtype}")
+
+        # 不使用startWindowThread，直接创建窗口
+        print(f"DEBUG: Creating window: {window_name}")
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback(window_name, self.mouse_callback)
+
+        # 显示初始图像
+        print("DEBUG: Showing image")
+        cv2.imshow(window_name, self.clone)
+
+        # 多次刷新窗口以确保完全初始化
+        print("DEBUG: Refreshing window")
+        for i in range(5):
+            cv2.waitKey(100)
+
+        print("DEBUG: Setting mouse callback")
+        cv2.setMouseCallback(window_name, lambda *args: self.mouse_callback(*args))
 
         print("\n" + "=" * 60)
         print("ROI区域标定系统")

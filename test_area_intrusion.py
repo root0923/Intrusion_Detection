@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
     datefmt='%H:%M:%S'
 )
@@ -62,12 +62,17 @@ def create_rule_config(rois, actual_width, actual_height):
     """创建规则配置（模拟API返回的配置格式）"""
     rule_config = {
         'enabled': True,
-        'sensitivity': 0.45,  # 对应前端sensitivity=5
-        'first_alarm_time': 1.0,  # 首次报警时间1秒
-        'repeated_alarm_time': 5.0,  # 测试用，10秒重复报警间隔
+        'sensitivity': 0.65,  # 对应前端sensitivity=5
+        'first_alarm_time': 0.0,  # 首次报警时间2秒
+        'repeated_alarm_time': 0.0,  # 重复报警间隔1秒（测试用）
         'frontend_width': actual_width,  # 前端显示尺寸
         'frontend_height': actual_height,
         'roi_arrays': rois,  # 转换后的ROI坐标
+        # 过滤规则配置
+        'enable_static_filter': True,  # 启用静止过滤
+        'enable_parallel_filter': True,  # 启用平行移动过滤
+        'static_threshold': 15.0,  # 静止判断阈值（像素）
+        'parallel_slope_threshold': 0.1,  # 斜率差异阈值
         'device_info': {
             'device_id': 'test_device',
             'device_name': '测试摄像头',
@@ -86,14 +91,13 @@ def main():
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = "./data/dataset/video_IR/test00.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = "data/fuyangben.mp4"  # 0=摄像头, 或者视频文件路径
 
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
-    model_weights = "data/LLVIP-yolo11m-e300-16-pretrained.pt"
+    model_weights = "runs/finetune_V_2classes/lake-yolo11m-finetune_V_2classes/weights/last.pt"
     device = "cuda:0"  # 或 "cpu"
     tracker = "bytetrack"
     target_size = 800
-    conf_threshold = 0.25
 
     # 2. 加载ROI配置
     print("\n[1/6] 加载ROI配置...")
@@ -144,13 +148,15 @@ def main():
     print(f"  - First alarm time: {rule.first_alarm_time}s")
     print(f"  - Tolerance time: {rule.tolerance_time}s")
     print(f"  - Repeated alarm time: {rule.repeated_alarm_time}s")
+    print(f"  - Static filter: {rule.enable_static_filter} (threshold: {rule.static_threshold}px)")
+    print(f"  - Parallel filter: {rule.enable_parallel_filter} (threshold: {rule.parallel_slope_threshold})")
 
     # 7. 主循环
     print(f"\n[6/6] 开始处理循环...")
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
     frame_count = 0
-    process_interval = 5  # 每隔多少帧处理一次
+    process_interval = 25
     times = []
 
     try:
@@ -165,11 +171,11 @@ def main():
 
             # 每隔process_interval帧处理一次
             if (frame_count - 1) % process_interval == 0:
-                # 检测和跟踪
+                # 检测和跟踪（统一推理）
                 detect_start_time = time.time()
                 detections = detector.detect_and_track(
                     frame,
-                    conf_threshold=conf_threshold,
+                    conf_threshold=0.25,  # 统一用0.25，规则内部会按sensitivity过滤
                     iou_threshold=0.7,
                     target_size=target_size
                 )
@@ -185,16 +191,16 @@ def main():
                 # 绘制ROI
                 vis_frame = draw_rois(vis_frame, converted_rois, color=(0, 255, 0), thickness=2)
 
-                # 绘制检测框
+                # 绘制检测框（只显示过滤后的入侵者框）
                 vis_frame = draw_detections(vis_frame, detections, conf_threshold=rule.sensitivity,
-                                           class_names={0: 'person'})
+                                           class_names={0: 'person', 1: 'duck'})
 
-                # 显示入侵状态
-                if rule.intrusion_state['first_time'] is not None:
-                    duration = current_time - rule.intrusion_state['first_time']
-                    state_text = f"INTRUSION! Duration: {duration:.1f}s"
-                    cv2.putText(vis_frame, state_text, (10, 60),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # # 显示入侵状态
+                # if rule.intrusion_state['first_time'] is not None:
+                #     duration = current_time - rule.intrusion_state['first_time']
+                #     state_text = f"INTRUSION! Duration: {duration:.1f}s"
+                #     cv2.putText(vis_frame, state_text, (10, 60),
+                #               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
                 # 如果有报警，显示报警信息
                 if alarm_info:
@@ -208,7 +214,7 @@ def main():
                         np.frombuffer(base64.b64decode(base64_image), np.uint8),
                         cv2.IMREAD_COLOR
                     )
-                    alarm_image_path = f"runs/area_intrusion_new/alarm_{frame_count}.jpg"
+                    alarm_image_path = f"runs/area_intrusion/alarm_{frame_count}.jpg"
                     cv2.imwrite(alarm_image_path, image_data)
 
                 # 显示图像
@@ -237,7 +243,6 @@ def main():
         # 清理
         cap.release()
         cv2.destroyAllWindows()
-        print("\n✓ 测试结束")
 
 
 if __name__ == '__main__':

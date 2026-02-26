@@ -209,3 +209,73 @@ def draw_alarm_text(image: np.ndarray, text: str, position=(10, 40)) -> np.ndarr
     img_draw = image.copy()
     cv2.putText(img_draw, text, position, cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
     return img_draw
+
+
+def is_static_object(bbox1: List[float], bbox2: List[float], bbox3: List[float], threshold: float = 15.0) -> bool:
+    """
+    判断三帧检测框是否静止（位置几乎不变）
+    使用对角两点距离判断
+
+    Args:
+        bbox1: 第1帧检测框 [x1, y1, x2, y2]
+        bbox2: 第2帧检测框 [x1, y1, x2, y2]
+        bbox3: 第3帧检测框 [x1, y1, x2, y2]
+        threshold: 距离阈值（像素）
+
+    Returns:
+        bool: 是否为静止目标
+    """
+    x1_1, y1_1, x2_1, y2_1 = bbox1
+    x1_2, y1_2, x2_2, y2_2 = bbox2
+    x1_3, y1_3, x2_3, y2_3 = bbox3
+
+    # 计算对角两点距离（左上和右下）
+    dist_topleft = np.sqrt((x1_1 - x1_2)**2 + (y1_1 - y1_2)**2) + \
+                   np.sqrt((x1_2 - x1_3)**2 + (y1_2 - y1_3)**2)
+    dist_bottomright = np.sqrt((x2_1 - x2_2)**2 + (y2_1 - y2_2)**2) + \
+                      np.sqrt((x2_2 - x2_3)**2 + (y2_2 - y2_3)**2)
+
+    total_dist = dist_topleft + dist_bottomright
+
+    return total_dist < threshold
+
+
+def is_parallel_movement(bbox1: List[float], bbox2: List[float], bbox3: List[float], slope_threshold: float = 0.1) -> bool:
+    """
+    判断三帧检测框顶部中心点连线是否平行（倒影特征）
+    计算前两帧和后两帧的斜率，如果近似相等则为平行移动
+
+    Args:
+        bbox1: 第1帧检测框 [x1, y1, x2, y2]
+        bbox2: 第2帧检测框 [x1, y1, x2, y2]
+        bbox3: 第3帧检测框 [x1, y1, x2, y2]
+        slope_threshold: 斜率差异阈值
+
+    Returns:
+        bool: 是否为平行移动
+    """
+    # 计算顶部中心点
+    top_center_1 = ((bbox1[0] + bbox1[2]) / 2, bbox1[1])
+    top_center_2 = ((bbox2[0] + bbox2[2]) / 2, bbox2[1])
+    top_center_3 = ((bbox3[0] + bbox3[2]) / 2, bbox3[1])
+
+    # 计算位移
+    dx1 = top_center_2[0] - top_center_1[0]
+    dy1 = top_center_2[1] - top_center_1[1]
+    dx2 = top_center_3[0] - top_center_2[0]
+    dy2 = top_center_3[1] - top_center_2[1]
+
+    # 处理垂直移动情况
+    if abs(dx1) < 1 and abs(dx2) < 1:
+        # 都近似垂直，认为平行
+        return True
+    elif abs(dx1) < 1 or abs(dx2) < 1:
+        # 一个垂直一个不垂直，不平行
+        return False
+
+    # 计算斜率
+    k1 = dy1 / dx1
+    k2 = dy2 / dx2
+
+    # 判断斜率差异
+    return abs(k1 - k2) < slope_threshold
