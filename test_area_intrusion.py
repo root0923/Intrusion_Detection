@@ -1,8 +1,9 @@
 """
-测试新的区域入侵规则 - Test Area Intrusion Rule
+测试涉水安全规则 - Test Water Safety Rule
 
 功能：
-- 测试 unified_detector 框架中的 AreaIntrusionRule
+- 测试 unified_detector 框架中的 WaterSafetyRule
+- 测试splash检测逻辑（检测到splash且前5秒内有person则报警）
 - 使用本地 ROI 配置文件
 - 不依赖后端API，纯本地测试
 """
@@ -16,9 +17,9 @@ import time
 import logging
 from pathlib import Path
 import base64
-import numpy as np 
+import numpy as np
 from unified_detector.core.detector import UnifiedDetector
-from unified_detector.rules.area_intrusion import AreaIntrusionRule
+from unified_detector.rules.water_safety import WaterSafetyRule
 from unified_detector.utils.geometry import draw_rois, draw_detections, draw_alarm_text
 import warnings
 warnings.filterwarnings("ignore")
@@ -62,7 +63,7 @@ def create_rule_config(rois, actual_width, actual_height):
     """创建规则配置（模拟API返回的配置格式）"""
     rule_config = {
         'enabled': True,
-        'sensitivity': 0.65,  # 对应前端sensitivity=5
+        'sensitivity': 0.55,  # 对应前端sensitivity=4
         'first_alarm_time': 0.0,  # 首次报警时间2秒
         'repeated_alarm_time': 0.0,  # 重复报警间隔1秒（测试用）
         'frontend_width': actual_width,  # 前端显示尺寸
@@ -86,22 +87,29 @@ def create_rule_config(rois, actual_width, actual_height):
 def main():
     """主函数"""
     print("=" * 60)
-    print("区域入侵规则测试 - Area Intrusion Rule Test")
+    print("涉水安全规则测试 - Water Safety Rule Test")
     print("=" * 60)
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = "data/fuyangben.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = "data/lss.mp4"  # 0=摄像头, 或者视频文件路径
 
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
-    model_weights = "runs/finetune_V_2classes/lake-yolo11m-finetune_V_2classes/weights/last.pt"
+    # 使用 TensorRT Engine 模型
+    model_weights = "runs/finetune_V_3classes/lake-yolo11m-finetune_V_3classes7/weights/last.engine"
     device = "cuda:0"  # 或 "cpu"
     tracker = "bytetrack"
     target_size = 800
+    # RGB 模型配置
+    channels = 3
+    use_simotm = 'RGB'
 
     # 2. 加载ROI配置
     print("\n[1/6] 加载ROI配置...")
     roi_config = load_roi_config(roi_config_path)
+
+    # 创建输出目录
+    os.makedirs("runs/water_safety", exist_ok=True)
 
     # 3. 打开视频流
     print(f"\n[2/6] 打开视频流...")
@@ -136,13 +144,13 @@ def main():
 
     # 5. 初始化检测器
     print(f"\n[4/6] 初始化YOLO检测器...")
-    detector = UnifiedDetector(model_yaml, model_weights, device, tracker)
+    detector = UnifiedDetector(model_yaml, model_weights, device, tracker, channels=channels, use_simotm=use_simotm)
     print("✓ 检测器初始化完成")
 
     # 6. 初始化规则引擎
-    print(f"\n[5/6] 初始化区域入侵规则...")
+    print(f"\n[5/6] 初始化涉水安全规则...")
     rule_config = create_rule_config(converted_rois, actual_width, actual_height)
-    rule = AreaIntrusionRule(rule_config, camera_key="test_camera")
+    rule = WaterSafetyRule(rule_config, camera_key="test_camera")
     print("✓ 规则引擎初始化完成")
     print(f"  - Sensitivity: {rule.sensitivity}")
     print(f"  - First alarm time: {rule.first_alarm_time}s")
@@ -150,13 +158,15 @@ def main():
     print(f"  - Repeated alarm time: {rule.repeated_alarm_time}s")
     print(f"  - Static filter: {rule.enable_static_filter} (threshold: {rule.static_threshold}px)")
     print(f"  - Parallel filter: {rule.enable_parallel_filter} (threshold: {rule.parallel_slope_threshold})")
+    print(f"  - Person history window: {rule.person_history_window}s")
+    print(f"  - Splash history window: {rule.splash_history_window}s")
 
     # 7. 主循环
     print(f"\n[6/6] 开始处理循环...")
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
     frame_count = 0
-    process_interval = 25
+    process_interval = 1
     times = []
 
     try:
@@ -191,16 +201,47 @@ def main():
                 # 绘制ROI
                 vis_frame = draw_rois(vis_frame, converted_rois, color=(0, 255, 0), thickness=2)
 
-                # 绘制检测框（只显示过滤后的入侵者框）
-                vis_frame = draw_detections(vis_frame, detections, conf_threshold=rule.sensitivity,
-                                           class_names={0: 'person', 1: 'duck'})
+                # 绘制检测框
+                # splash使用0.25的置信度阈值，颜色为青色
+                vis_frame = draw_detections(
+                    vis_frame,
+                    detections,
+                    conf_threshold=rule.sensitivity,
+                    class_names={0: 'person', 1: 'duck', 2: 'splash'},
+                    class_conf_thresholds={2: 0.25},  # splash使用0.25阈值
+                    class_colors={2: (255, 255, 0)}  # splash使用青色 (B, G, R)
+                )
 
                 # # 显示入侵状态
-                # if rule.intrusion_state['first_time'] is not None:
-                #     duration = current_time - rule.intrusion_state['first_time']
-                #     state_text = f"INTRUSION! Duration: {duration:.1f}s"
+                # if rule.detection_history:
+                #     duration = current_time - rule.detection_history[0][0]
+                #     state_text = f"WATER SAFETY DETECT! Duration: {duration:.1f}s"
                 #     cv2.putText(vis_frame, state_text, (10, 60),
                 #               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+                # 显示person历史状态
+                if rule.person_history:
+                    has_person = any(has_person for _, has_person in rule.person_history)
+                    if has_person:
+                        person_text = f"Person in ROI (last 5s): YES"
+                        person_color = (0, 0, 255)  # 红色
+                    else:
+                        person_text = f"Person in ROI (last 5s): NO"
+                        person_color = (0, 255, 0)  # 绿色
+                    cv2.putText(vis_frame, person_text, (10, 60),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, person_color, 2)
+
+                # 显示splash历史状态
+                if rule.splash_history:
+                    has_splash = any(has_splash for _, has_splash in rule.splash_history)
+                    if has_splash:
+                        splash_text = f"Splash in ROI (last 5s): YES"
+                        splash_color = (0, 0, 255)  # 红色
+                    else:
+                        splash_text = f"Splash in ROI (last 5s): NO"
+                        splash_color = (0, 255, 0)  # 绿色
+                    cv2.putText(vis_frame, splash_text, (10, 90),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, splash_color, 2)
 
                 # 如果有报警，显示报警信息
                 if alarm_info:
@@ -214,11 +255,11 @@ def main():
                         np.frombuffer(base64.b64decode(base64_image), np.uint8),
                         cv2.IMREAD_COLOR
                     )
-                    alarm_image_path = f"runs/area_intrusion/alarm_{frame_count}.jpg"
+                    alarm_image_path = f"runs/water_safety/alarm_{frame_count}.jpg"
                     cv2.imwrite(alarm_image_path, image_data)
 
                 # 显示图像
-                cv2.imshow('Area Intrusion Test', vis_frame)
+                cv2.imshow('Water Safety Test', vis_frame)
 
             # 按键处理
             key = cv2.waitKey(1) & 0xFF

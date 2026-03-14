@@ -33,17 +33,18 @@ def point_in_polygon(point: Tuple[float, float], polygon) -> bool:
 
 def bbox_center_in_rois(bbox: List[float], rois: List[np.ndarray]) -> bool:
     """
-    判断检测框中心点是否在任一ROI区域内
+    判断检测框底部中心点是否在任一ROI区域内
 
     Args:
         bbox: [x1, y1, x2, y2] 检测框
         rois: List[np.ndarray] ROI区域列表
 
     Returns:
-        bool: 中心点是否在任一ROI内
+        bool: 底部中心点是否在任一ROI内
     """
     x1, y1, x2, y2 = bbox
-    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    # 底部中心点：x坐标为中心，y坐标为底部
+    cx, cy = (x1 + x2) / 2, y2
 
     for roi in rois:
         if point_in_polygon((cx, cy), roi):
@@ -149,15 +150,19 @@ def draw_tripwires(image: np.ndarray, lines: List[List[List[int]]], color=(0, 25
 
 
 def draw_detections(image: np.ndarray, detections: List[Dict],
-                    conf_threshold: float = 0.0, class_names: Dict[int, str] = None) -> np.ndarray:
+                    conf_threshold: float = 0.0, class_names: Dict[int, str] = None,
+                    class_conf_thresholds: Dict[int, float] = None,
+                    class_colors: Dict[int, Tuple[int, int, int]] = None) -> np.ndarray:
     """
     在图像上绘制检测框
 
     Args:
         image: 原始图像
         detections: 检测结果列表
-        conf_threshold: 置信度阈值（用于区分颜色）
+        conf_threshold: 默认置信度阈值（用于区分颜色）
         class_names: 类别名称字典
+        class_conf_thresholds: 每个类别的置信度阈值字典 {cls: threshold}
+        class_colors: 每个类别的颜色字典 {cls: (B, G, R)}
 
     Returns:
         np.ndarray: 绘制后的图像
@@ -169,9 +174,20 @@ def draw_detections(image: np.ndarray, detections: List[Dict],
         conf = det['conf']
         cls = det['cls']
 
+        # 获取该类别的置信度阈值
+        if class_conf_thresholds and cls in class_conf_thresholds:
+            threshold = class_conf_thresholds[cls]
+        else:
+            threshold = conf_threshold
+
         # 根据置信度选择颜色
-        is_high_conf = conf >= conf_threshold
-        color = (0, 0, 255) if is_high_conf else (255, 144, 30)
+        is_high_conf = conf >= threshold
+
+        # 如果指定了类别颜色，使用类别颜色；否则根据置信度选择颜色
+        if class_colors and cls in class_colors:
+            color = class_colors[cls]
+        else:
+            color = (0, 0, 255) if is_high_conf else (255, 144, 30)
 
         # 绘制框
         cv2.rectangle(vis_image, (x1, y1), (x2, y2), color, 2)
@@ -265,11 +281,13 @@ def is_parallel_movement(bbox1: List[float], bbox2: List[float], bbox3: List[flo
     dx2 = top_center_3[0] - top_center_2[0]
     dy2 = top_center_3[1] - top_center_2[1]
 
-    # 处理垂直移动情况
-    if abs(dx1) < 1 and abs(dx2) < 1:
-        # 都近似垂直，认为平行
-        return True
-    elif abs(dx1) < 1 or abs(dx2) < 1:
+    # 处理垂直移动情况（自由落体）
+    # 如果水平位移很小（<5像素），认为是垂直移动，不过滤
+    vertical_threshold = 5.0
+    if abs(dx1) < vertical_threshold and abs(dx2) < vertical_threshold:
+        # 都近似垂直移动（水平位移很小），不过滤（可能是自由落体）
+        return False
+    elif abs(dx1) < vertical_threshold or abs(dx2) < vertical_threshold:
         # 一个垂直一个不垂直，不平行
         return False
 

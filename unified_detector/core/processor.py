@@ -174,11 +174,18 @@ class CameraProcessor:
             else:
                 # 独立加载模型
                 logger.info(f"[{self.camera_key}] 初始化YOLO检测器...")
+                # 根据 user_type 确定预处理方法
+                user_type = self.camera_config.get('user_type', '0')
+                use_simotm = 'SimOTMBBS' if user_type == '1' else 'RGB'
+                logger.info(f"[{self.camera_key}] 通道类型: {'热成像' if user_type == '1' else '可见光'} (use_simotm={use_simotm})")
+
                 self.detector = UnifiedDetector(
                     self.model_yaml,
                     self.model_weights,
                     self.device,
-                    self.tracker
+                    self.tracker,
+                    channels=3,
+                    use_simotm=use_simotm
                 )
                 logger.info(f"[{self.camera_key}] ✓ YOLO检测器初始化完成")
 

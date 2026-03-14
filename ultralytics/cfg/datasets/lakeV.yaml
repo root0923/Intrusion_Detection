@@ -4,7 +4,7 @@ train: images/train
 val: images/val
 
 # 类别数量
-nc: 2 
+nc: 3
 
 # 类别名称
-names: ['person', 'duck']
+names: ['person', 'duck', 'splash']

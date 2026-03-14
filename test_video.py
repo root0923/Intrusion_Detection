@@ -447,7 +447,7 @@ def parse_arguments():
                        help='目标检测帧率(每秒检测帧数)')
     
     # 输入源参数
-    parser.add_argument('--input', type=str, default='data/test_visible_neg.mp4',
+    parser.add_argument('--input', type=str, default='data/luoshui.mp4',
                        help='输入源: 视频文件路径')
     
     # 处理参数
@@ -455,7 +455,7 @@ def parse_arguments():
                        help='最大处理帧数 (0表示无限制)')
     
     # 输出参数
-    parser.add_argument('--output', type=str, default='data/output/test_visible_neg2_60.mp4',
+    parser.add_argument('--output', type=str, default='data/output/luoshui_output.mp4',
                        help='输出视频路径 (不指定则自动生成)')
     parser.add_argument('--no-display', action='store_true',
                        help='不显示实时画面')

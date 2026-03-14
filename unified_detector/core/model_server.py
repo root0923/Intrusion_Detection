@@ -236,11 +236,17 @@ class ModelServer:
             from unified_detector.core.detector import UnifiedDetector
 
             logger.info("正在加载可见光YOLO模型...")
-            detector_visible = UnifiedDetector(model_yaml, model_weights, device, tracker)
+            detector_visible = UnifiedDetector(
+                model_yaml, model_weights, device, tracker,
+                channels=3, use_simotm='RGB'
+            )
             logger.info("✓ 可见光YOLO模型加载完成")
 
             logger.info("正在加载热成像YOLO模型...")
-            detector_thermal = UnifiedDetector(thermal_model_yaml, thermal_model_weights, device, tracker)
+            detector_thermal = UnifiedDetector(
+                thermal_model_yaml, thermal_model_weights, device, tracker,
+                channels=3, use_simotm='SimOTMBBS'
+            )
             logger.info("✓ 热成像YOLO模型加载完成")
 
         except Exception as e:

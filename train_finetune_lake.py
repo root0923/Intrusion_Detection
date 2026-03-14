@@ -4,18 +4,19 @@ from ultralytics import YOLO
 
 if __name__ == '__main__':
     # 加载预训练模型进行微调
-    model = YOLO('data/LLVIP-yolo11m-e300-16-pretrained.pt')
+    model = YOLO('ultralytics/cfg/models/11/yolo11m.yaml')
 
     # 微调训练配置
     model.train(
         data='ultralytics/cfg/datasets/lakeV.yaml',  # 数据集配置
-
+        channels=3,           # 使用3通道RGB
+        use_simotm='RGB',
         # 图像设置
         imgsz=800,
         cache=True,  # 如果内存够大可以设为True加速训练
 
         # 训练轮次（微调不需要太多轮）
-        epochs=70,  # 微调建议30-100轮，根据数据量调整
+        epochs=300,  # 微调建议30-100轮，根据数据量调整
 
         # 批次大小（根据显存调整）
         batch=32,  # 如果显存不够，可以改为8或4
@@ -44,8 +45,8 @@ if __name__ == '__main__':
         save_period=10,  # 每10轮保存一次
 
         # 输出目录
-        project='runs/finetune_V_2classes',
-        name='lake-yolo11m-finetune_V_2classes',
+        project='runs/finetune_V_3classes',
+        name='lake-yolo11m-finetune_V_3classes',
         exist_ok=False,  # 如果目录存在是否覆盖
 
         # 其他可选参数
