@@ -61,7 +61,8 @@ class ProcessManager:
                  use_model_server: bool = False,
                  enable_adaptive_fps: bool = False, fps_idle: float = 1.0,
                  fps_active: float = 5.0, person_timeout: int = 5,
-                 tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0):
+                 tripwire_first_alarm_time: float = 10.0, tripwire_tolerance_time: float = 3.0,
+                 machine_id: int = None, total_machines: int = 2):
         """
         Args:
             api_client: API客户端
@@ -83,6 +84,8 @@ class ProcessManager:
             person_timeout: 多少秒没检测到人后切换到低帧率
             tripwire_first_alarm_time: 绊线入侵首次报警时间（秒）
             tripwire_tolerance_time: 绊线入侵容忍时间（秒）
+            machine_id: 当前机器ID（1, 2, 3...），None表示不分流
+            total_machines: 总共部署的机器数量
         """
         self.api_client = api_client
         self.model_yaml = model_yaml
@@ -105,6 +108,10 @@ class ProcessManager:
         # 绊线入侵配置
         self.tripwire_first_alarm_time = tripwire_first_alarm_time
         self.tripwire_tolerance_time = tripwire_tolerance_time
+
+        # 多机部署分流配置
+        self.machine_id = machine_id
+        self.total_machines = total_machines
 
         # 进程字典: {camera_key: {'process': Process, 'config_queue': Queue, 'config': Dict, 'device': str}}
         self.processes = {}
@@ -186,6 +193,45 @@ class ProcessManager:
         self.logger.info(f"\n✓ 所有ModelServer已启动（{len(self.model_servers)} 个GPU）")
         self.logger.info(f"  预计总显存占用: {len(self.devices) * 1.0:.1f}GB")
         self.logger.info(f"  总槽位容量: {len(self.devices) * max_cameras_per_gpu} 个")
+
+    def filter_cameras_for_machine(self, camera_configs: Dict) -> Dict:
+        """
+        根据machine_id过滤出当前机器需要处理的摄像头
+
+        Args:
+            camera_configs: 所有摄像头配置
+
+        Returns:
+            过滤后的摄像头配置（仅包含当前机器需要处理的）
+        """
+        if self.machine_id is None:
+            # 如果没有设置machine_id，处理所有摄像头
+            return camera_configs
+
+        # 对camera_key进行排序，确保分配的一致性
+        sorted_keys = sorted(camera_configs.keys())
+
+        # 过滤：只保留属于当前机器的摄像头
+        # 公式：index % total_machines == (machine_id - 1)
+        filtered_configs = {}
+        assigned_cameras = []
+        for idx, camera_key in enumerate(sorted_keys):
+            if idx % self.total_machines == (self.machine_id - 1):
+                filtered_configs[camera_key] = camera_configs[camera_key]
+                camera_name = f"{camera_configs[camera_key]['device_name']}/{camera_configs[camera_key]['channel_name']}"
+                assigned_cameras.append(f"  [{idx}] {camera_key} ({camera_name})")
+
+        self.logger.info(f"\n多机分流结果: 机器{self.machine_id}/{self.total_machines}")
+        self.logger.info(f"  总摄像头数: {len(camera_configs)}")
+        self.logger.info(f"  分配给本机: {len(filtered_configs)}")
+        if assigned_cameras:
+            self.logger.info(f"  分配详情:")
+            for cam_info in assigned_cameras[:10]:  # 最多显示10个
+                self.logger.info(cam_info)
+            if len(assigned_cameras) > 10:
+                self.logger.info(f"  ... 还有 {len(assigned_cameras) - 10} 个摄像头")
+
+        return filtered_configs
 
     def _get_next_device(self):
         """获取下一个GPU设备（轮询分配）"""
@@ -496,6 +542,12 @@ def main():
     parser.add_argument('--log-dir', type=str, default=None,
                        help='日志目录（默认: unified_detector/log）')
 
+    # 多机部署分流配置
+    parser.add_argument('--machine-id', type=int, default=None,
+                       help='当前机器ID（1, 2, 3...），用于多机部署时分流摄像头')
+    parser.add_argument('--total-machines', type=int, default=2,
+                       help='总共部署的机器数量（默认2台）')
+
     args = parser.parse_args()
 
     # 配置日志
@@ -505,6 +557,13 @@ def main():
     logger.info("="*60)
     logger.info("统一检测框架 - Unified Detection Framework")
     logger.info("="*60)
+
+    # 显示多机分流配置
+    if args.machine_id is not None:
+        logger.info(f"\n多机部署模式: 机器 {args.machine_id}/{args.total_machines}")
+        logger.info(f"  本机将处理: 索引 % {args.total_machines} == {args.machine_id - 1} 的摄像头")
+    else:
+        logger.info("\n单机模式: 处理所有摄像头")
 
     # 1. 登录
     logger.info("\n[1/5] 登录后端系统...")
@@ -549,8 +608,13 @@ def main():
         fps_active=args.fps_active,
         person_timeout=args.person_timeout,
         tripwire_first_alarm_time=args.tripwire_first_alarm_time,
-        tripwire_tolerance_time=args.tripwire_tolerance_time
+        tripwire_tolerance_time=args.tripwire_tolerance_time,
+        machine_id=args.machine_id,
+        total_machines=args.total_machines
     )
+
+    # 应用多机分流过滤
+    current_configs = process_manager.filter_cameras_for_machine(current_configs)
 
     # 4.5. 如果使用ModelServer模式，在启动进程前先启动ModelServer（需要预知camera配置）
     if args.use_model_server:
@@ -582,6 +646,9 @@ def main():
                 continue
 
             new_configs = ConfigParser.parse_device_config(new_config_data)
+
+            # 应用多机分流过滤
+            new_configs = process_manager.filter_cameras_for_machine(new_configs)
 
             # 比对配置变化
             changes = ConfigParser.compare_configs(current_configs, new_configs)

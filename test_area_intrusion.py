@@ -92,11 +92,11 @@ def main():
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = "data/lss.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = "data/ls2.mp4"  # 0=摄像头, 或者视频文件路径
 
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
     # 使用 TensorRT Engine 模型
-    model_weights = "runs/finetune_V_3classes/lake-yolo11m-finetune_V_3classes7/weights/last.engine"
+    model_weights = "data/visible.engine"
     device = "cuda:0"  # 或 "cpu"
     tracker = "bytetrack"
     target_size = 800
@@ -166,7 +166,7 @@ def main():
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
     frame_count = 0
-    process_interval = 1
+    process_interval = 4
     times = []
 
     try:

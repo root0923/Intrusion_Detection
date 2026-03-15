@@ -258,14 +258,14 @@ def compare_pt_vs_engine(pt_path, engine_path, images, device, conf=0.25, iou=0.
 def main():
     # ========== 配置 ==========
     MODEL_YAML = "ultralytics/cfg/models/11/yolo11m.yaml"
-    MODEL_WEIGHTS = "runs/finetune_V_3classes/lake-yolo11m-finetune_V_3classes7/weights/last.pt"
+    MODEL_WEIGHTS = "data/Visible.pt"
     ENGINE_WEIGHTS = None  # 如果为None，会自动查找同名.engine文件
     DEVICE = "cuda:0"  # 或 "cuda:1"
     IMG_SIZE = 800
     NUM_TEST_IMAGES = 1000
     CONF_THRESHOLD = 0.25
     IOU_THRESHOLD = 0.7
-    BATCH_SIZES = [1, 2, 4, 8]  # 要测试的batch sizes
+    BATCH_SIZES = [1, 2, 4]  # 要测试的batch sizes
 
     # 新增：选择测试模式
     TEST_MODE = "both"  # "pt" | "engine" | "both" | "compare"
@@ -400,25 +400,25 @@ def main():
     print(f"{'='*60}")
 
     # ========== 实际场景分析 ==========
-    print(f"\n实际场景分析 (24路摄像头):")
+    print(f"\n实际场景分析 (27路摄像头):")
     print(f"{'-'*60}")
 
     for batch_size in BATCH_SIZES:
         avg_time = results[batch_size]
 
         # 计算24路情况下的性能
-        time_per_24_frames = 24 * avg_time  # 处理24帧的总时间(ms)
+        time_per_24_frames = 27 * avg_time  # 处理24帧的总时间(ms)
         max_fps_per_camera = 1000 / time_per_24_frames  # 每路最大帧率
 
         # 如果使用batching，需要加上等待时间
         if batch_size > 1:
             # 假设等待窗口为batch凑齐的时间
-            wait_time = (batch_size - 1) * (1000 / 24)  # 粗略估计
+            wait_time = (batch_size - 1) * (1000 / 27)  # 粗略估计
             total_latency = avg_time + wait_time
             print(f"Batch={batch_size}: 单张{avg_time:.1f}ms + 等待{wait_time:.0f}ms = {total_latency:.0f}ms延迟, "
-                  f"24路最大{max_fps_per_camera:.2f}fps/路")
+                  f"27路最大{max_fps_per_camera:.2f}fps/路")
         else:
-            print(f"Batch=1:  单张{avg_time:.1f}ms, 24路最大{max_fps_per_camera:.2f}fps/路")
+            print(f"Batch=1:  单张{avg_time:.1f}ms, 27路最大{max_fps_per_camera:.2f}fps/路")
 
     print(f"\n建议:")
     # 找到最优的batch size
@@ -465,7 +465,7 @@ def main():
         print(f"\n{'='*60}")
         print(f"PT vs TensorRT 总结")
         print(f"{'='*60}")
-        print(f"  PT (Batch=1):  {pt_batch1:.2f}ms/张")
+        print(f"  PT:  {pt_batch1:.2f}ms/张")
         print(f"  TensorRT:      {engine_avg:.2f}ms/张")
         print(f"  加速比:        {speedup:.2f}x")
         print(f"{'='*60}")

@@ -313,7 +313,7 @@ class WaterSafetyRule(RuleEngine):
 
         # 2. 检查当前帧是否有splash（类别2）在区域内
         # splash使用更低的置信度阈值（0.3）
-        splash_detections = [d for d in original_detections if d.get('cls') == 2 and d['conf'] >= 0.25]
+        splash_detections = [d for d in original_detections if d.get('cls') == 2 and d['conf'] >= 0.45]
         splash_in_roi = [d for d in splash_detections if bbox_center_in_rois(d['bbox'], self.rois)]
         has_splash_in_roi = len(splash_in_roi) > 0
 
@@ -439,77 +439,77 @@ class WaterSafetyRule(RuleEngine):
                     # 容忍时间内，保持状态不变
                     logger.debug(f"[{self.camera_key}] 涉水安全检测 暂时未检测到目标 (容忍中: {gap:.1f}s / {self.tolerance_time}s)")
 
-        # # === 新增：Splash检测逻辑（应用静止和平行移动过滤） ===
-        # # 1. 只处理 splash（类别2），过滤掉其他类别
-        # valid_splash_detections = [d for d in original_detections if d.get('cls') == 2 and d['conf'] >= 0.65]
+        # === 新增：Splash检测逻辑 ===
+        # 1. 只处理 splash（类别2），过滤掉其他类别
+        valid_splash_detections = [d for d in original_detections if d.get('cls') == 2 and d['conf'] >= 0.45]
 
-        # # 3. 过滤ROI（框底部中心点在ROI内）
-        # splash_intruders = []
-        # splash_intruder_bboxes = []
-        # for det in valid_splash_detections:
-        #     if bbox_center_in_rois(det['bbox'], self.rois):
-        #         splash_intruders.append(det)
-        #         splash_intruder_bboxes.append(det['bbox'])
+        # 3. 过滤ROI（框底部中心点在ROI内）
+        splash_intruders = []
+        splash_intruder_bboxes = []
+        for det in valid_splash_detections:
+            if bbox_center_in_rois(det['bbox'], self.rois):
+                splash_intruders.append(det)
+                splash_intruder_bboxes.append(det['bbox'])
 
-        # # 4. 应用过滤规则（静止/平行移动）
-        # if len(splash_intruder_bboxes) > 0:
-        #     # 应用过滤（如果历史足够）
-        #     filtered_splash_bboxes = self._apply_filters_splash(splash_intruder_bboxes)
+        # 4. 应用过滤规则（静止/平行移动）
+        if len(splash_intruder_bboxes) > 0:
+            # 应用过滤（如果历史足够）
+            filtered_splash_bboxes = splash_intruder_bboxes
 
-        #     # 更新检测历史
-        #     if len(filtered_splash_bboxes) > 0:
-        #         # 有未被过滤的框
-        #         self.splash_detection_history.append((timestamp, filtered_splash_bboxes))
+            # 更新检测历史
+            if len(filtered_splash_bboxes) > 0:
+                # 有未被过滤的框
+                self.splash_detection_history.append((timestamp, filtered_splash_bboxes))
 
-        #         # 清理超过容忍时间的旧历史
-        #         while len(self.splash_detection_history) > 0:
-        #             if timestamp - self.splash_detection_history[0][0] > self.tolerance_time:
-        #                 self.splash_detection_history.pop(0)
-        #             else:
-        #                 break
+                # 清理超过容忍时间的旧历史
+                while len(self.splash_detection_history) > 0:
+                    if timestamp - self.splash_detection_history[0][0] > self.tolerance_time:
+                        self.splash_detection_history.pop(0)
+                    else:
+                        break
 
-        #         # 判断是否报警
-        #         if len(self.splash_detection_history) >= 3:
-        #             first_time = self.splash_detection_history[0][0]
-        #             duration = timestamp - first_time
+                # 判断是否报警
+                if len(self.splash_detection_history) >= 3:
+                    first_time = self.splash_detection_history[0][0]
+                    duration = timestamp - first_time
 
-        #             # 条件1：至少3帧检测 + 持续时间超过首次报警时间
-        #             if duration >= self.first_alarm_time:
-        #                 # 条件2：距离上次报警超过冷却时间
-        #                 if self.should_alarm(timestamp):
-        #                     # 触发报警（使用过滤后的框重建检测结果）
-        #                     filtered_splash_intruders = [det for det in splash_intruders if det['bbox'] in filtered_splash_bboxes]
-        #                     alarm_info = self._create_splash_filtered_alarm_info(frame, filtered_splash_intruders)
-        #                     logger.info(f"[{self.camera_key}] 🚨 Splash检测报警! (持续 {duration:.1f}s, "
-        #                                f"检测帧数: {len(self.splash_detection_history)}, 当前检测数: {len(filtered_splash_intruders)})")
+                    # 条件1：至少3帧检测 + 持续时间超过首次报警时间
+                    if duration >= self.first_alarm_time:
+                        # 条件2：距离上次报警超过冷却时间
+                        if self.should_alarm(timestamp):
+                            # 触发报警（使用过滤后的框重建检测结果）
+                            filtered_splash_intruders = [det for det in splash_intruders if det['bbox'] in filtered_splash_bboxes]
+                            alarm_info = self._create_splash_filtered_alarm_info(frame, filtered_splash_intruders)
+                            logger.info(f"[{self.camera_key}] 🚨 Splash检测报警! (持续 {duration:.1f}s, "
+                                       f"检测帧数: {len(self.splash_detection_history)}, 当前检测数: {len(filtered_splash_intruders)})")
 
-        #                     # 清空历史，重新开始
-        #                     self.splash_detection_history.clear()
+                            # 清空历史，重新开始
+                            self.splash_detection_history.clear()
 
-        #                     return alarm_info
+                            return alarm_info
 
-        #             logger.debug(f"[{self.camera_key}] Splash检测中 (持续 {duration:.1f}s, "
-        #                        f"检测帧数: {len(self.splash_detection_history)})")
-        #         else:
-        #             # 历史不足3帧，继续累积
-        #             logger.debug(f"[{self.camera_key}] Splash检测中 (检测帧数: {len(self.splash_detection_history)}/3)")
-        #     else:
-        #         # 全部被过滤，直接清空历史
-        #         logger.debug(f"[{self.camera_key}] 检测到Splash但全部被过滤（静止/倒影），清空历史")
-        #         self.splash_detection_history.clear()
-        # else:
-        #     # 当前帧未检测到splash目标
-        #     # 使用容忍时间机制：用第一帧时间判断是否超时
-        #     if len(self.splash_detection_history) > 0:
-        #         first_time = self.splash_detection_history[0][0]
-        #         gap = timestamp - first_time
-        #         if gap >= self.tolerance_time:
-        #             # 超过容忍时间，重置状态
-        #             logger.info(f"[{self.camera_key}] Splash检测结束 (总时长 {gap:.1f}s 已超过容忍时间)")
-        #             self.splash_detection_history.clear()
-        #         else:
-        #             # 容忍时间内，保持状态不变
-        #             logger.debug(f"[{self.camera_key}] Splash检测 暂时未检测到目标 (容忍中: {gap:.1f}s / {self.tolerance_time}s)")
+                    logger.debug(f"[{self.camera_key}] Splash检测中 (持续 {duration:.1f}s, "
+                               f"检测帧数: {len(self.splash_detection_history)})")
+                else:
+                    # 历史不足3帧，继续累积
+                    logger.debug(f"[{self.camera_key}] Splash检测中 (检测帧数: {len(self.splash_detection_history)}/3)")
+            else:
+                # 全部被过滤，直接清空历史
+                logger.debug(f"[{self.camera_key}] 检测到Splash但全部被过滤（静止/倒影），清空历史")
+                self.splash_detection_history.clear()
+        else:
+            # 当前帧未检测到splash目标
+            # 使用容忍时间机制：用第一帧时间判断是否超时
+            if len(self.splash_detection_history) > 0:
+                first_time = self.splash_detection_history[0][0]
+                gap = timestamp - first_time
+                if gap >= self.tolerance_time:
+                    # 超过容忍时间，重置状态
+                    logger.info(f"[{self.camera_key}] Splash检测结束 (总时长 {gap:.1f}s 已超过容忍时间)")
+                    self.splash_detection_history.clear()
+                else:
+                    # 容忍时间内，保持状态不变
+                    logger.debug(f"[{self.camera_key}] Splash检测 暂时未检测到目标 (容忍中: {gap:.1f}s / {self.tolerance_time}s)")
 
         return None
 

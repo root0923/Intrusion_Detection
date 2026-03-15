@@ -10,7 +10,7 @@ if __name__ == '__main__':
     model.train(
         data='ultralytics/cfg/datasets/lakeV.yaml',  # 数据集配置
         channels=3,           # 使用3通道RGB
-        use_simotm='RGB',
+        use_simotm='RGB', # SimOTMBBS
         # 图像设置
         imgsz=800,
         cache=True,  # 如果内存够大可以设为True加速训练
@@ -19,7 +19,8 @@ if __name__ == '__main__':
         epochs=300,  # 微调建议30-100轮，根据数据量调整
 
         # 批次大小（根据显存调整）
-        batch=32,  # 如果显存不够，可以改为8或4
+        batch=16,  # 如果显存不够，可以改为8或4
+        patience=0,
 
         # 数据增强
         close_mosaic=10,  # 最后10轮关闭mosaic增强

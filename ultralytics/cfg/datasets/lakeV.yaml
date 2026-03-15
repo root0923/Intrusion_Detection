@@ -1,5 +1,5 @@
 # 数据集路径
-path: /home/ysy/object_detection/intrusion/Intrusion_Detection/data/dataset/with_neg
+path: D:\hezhaoxu\water_safety\Intrusion_Detection\data\dataset\with_neg
 train: images/train
 val: images/val
 
