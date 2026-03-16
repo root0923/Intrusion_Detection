@@ -479,7 +479,7 @@ def main():
     parser = argparse.ArgumentParser(description='统一检测框架 - Unified Detection Framework')
 
     # API配置
-    parser.add_argument('--api-url', type=str, default="http://10.16.7.79:9199",
+    parser.add_argument('--api-url', type=str, default="https://192.168.1.201:9199",
                        help='后端API基础URL（如 http://localhost:8080）')
     parser.add_argument('--username', type=str, default='jzsx',
                        help='登录用户名')
@@ -491,7 +491,7 @@ def main():
                        default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='可见光模型配置YAML文件')
     parser.add_argument('--weights', type=str,
-                       default='data/LLVIP-yolo11m-e300-16-pretrained.pt',
+                       default='data/Visible.engine',
                        help='可见光模型权重文件')
 
     # 模型配置 - 热成像模型
@@ -499,16 +499,16 @@ def main():
                        default="ultralytics/cfg/models/11/yolo11m.yaml",
                        help='热成像模型配置YAML文件')
     parser.add_argument('--thermal-weights', type=str,
-                       default='data/LLVIP_IF-yolo11m-e300-16-pretrained.pt',
+                       default='data/IR.engine',
                        help='热成像模型权重文件')
 
-    parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0', 'cuda:1'],
+    parser.add_argument('--devices', type=str, nargs='+', default=['cuda:0'],
                        help='GPU设备列表 (例如: cuda:0 cuda:1，支持多GPU平均分配进程)')
 
     # 检测配置
     parser.add_argument('--target-size', type=int, default=800,
                        help='YOLO检测目标尺寸')
-    parser.add_argument('--process-fps', type=float, default=1.0,
+    parser.add_argument('--process-fps', type=float, default=2.5,
                        help='每秒处理帧数（抽帧）')
     parser.add_argument('--tracker', type=str, default='bytetrack',
                        choices=['bytetrack', 'botsort'],
@@ -531,11 +531,11 @@ def main():
     # 绊线入侵首次报警时间（避免启动时误报）
     parser.add_argument('--tripwire-first-alarm-time', type=float, default=2.0,
                        help='绊线入侵首次报警时间（秒），目标持续在危险侧多久后才报警，避免启动时误报（默认10秒）')
-    parser.add_argument('--tripwire-tolerance-time', type=float, default=15.0,
+    parser.add_argument('--tripwire-tolerance-time', type=float, default=5.0,
                        help='绊线入侵容忍时间（秒），目标短暂消失后多久重置状态（默认3秒）')
 
     # 配置更新
-    parser.add_argument('--config-update-interval', type=int, default=30,
+    parser.add_argument('--config-update-interval', type=int, default=300,
                        help='配置更新间隔（秒）')
 
     # 日志
@@ -543,7 +543,7 @@ def main():
                        help='日志目录（默认: unified_detector/log）')
 
     # 多机部署分流配置
-    parser.add_argument('--machine-id', type=int, default=None,
+    parser.add_argument('--machine-id', type=int, default=2,
                        help='当前机器ID（1, 2, 3...），用于多机部署时分流摄像头')
     parser.add_argument('--total-machines', type=int, default=2,
                        help='总共部署的机器数量（默认2台）')

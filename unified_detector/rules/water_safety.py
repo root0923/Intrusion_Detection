@@ -454,7 +454,7 @@ class WaterSafetyRule(RuleEngine):
         # 4. 应用过滤规则（静止/平行移动）
         if len(splash_intruder_bboxes) > 0:
             # 应用过滤（如果历史足够）
-            filtered_splash_bboxes = splash_intruder_bboxes
+            filtered_splash_bboxes = self._apply_filters_splash(splash_intruder_bboxes)
 
             # 更新检测历史
             if len(filtered_splash_bboxes) > 0:

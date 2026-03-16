@@ -86,7 +86,7 @@ class APIClient:
             }
 
             logger.info(f"正在登录: {url}")
-            response = self.session.post(url, json=data, timeout=10)
+            response = self.session.post(url, json=data, timeout=10, verify=False)
 
             if response.status_code == 200:
                 result = response.json()
@@ -111,7 +111,7 @@ class APIClient:
             url = f"{self.base_url}/sys/keepLoginingByToken"
             headers = {"x-access-token": self.token}
 
-            response = self.session.get(url, headers=headers, timeout=10)
+            response = self.session.get(url, headers=headers, timeout=10, verify=False)
 
             if response.status_code == 200:
                 logger.debug("✓ 保活成功")
@@ -154,7 +154,7 @@ class APIClient:
             url = f"{self.base_url}/artificial/api/listDeviceAndChannel"
             headers = {"x-access-token": self.token}
 
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self.session.get(url, headers=headers, timeout=15, verify=False)
 
             if response.status_code == 200:
                 result = response.json()
@@ -180,7 +180,7 @@ class APIClient:
             str: RTSP流地址
         """
         try:
-            url = f"{self.base_url}/media/api/play/playRealStream"
+            url = f"{self.base_url}/artificial/device/baseCameraDevice/playRealStream"
             headers = {"x-access-token": self.token}
             params = {
                 "deviceId": device_id,
@@ -188,7 +188,7 @@ class APIClient:
                 "protocol": "rtsp"
             }
 
-            response = self.session.get(url, headers=headers, params=params, timeout=15)
+            response = self.session.get(url, headers=headers, params=params, timeout=15, verify=False)
 
             if response.status_code == 200:
                 result = response.json()
@@ -223,7 +223,7 @@ class APIClient:
                 "x-access-token": self.token
             }
 
-            response = self.session.post(url, headers=headers, json=alarm_data, timeout=10)
+            response = self.session.post(url, headers=headers, json=alarm_data, timeout=10, verify=False)
 
             if response.status_code == 200:
                 logger.info("✓ 报警上传成功")

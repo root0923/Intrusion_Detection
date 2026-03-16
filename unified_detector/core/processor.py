@@ -14,6 +14,7 @@ import gc
 import logging
 import psutil
 import os
+import threading
 from typing import Dict, Optional
 from multiprocessing import Queue
 from .detector import UnifiedDetector
@@ -97,6 +98,17 @@ class CameraProcessor:
         # 视频流信息
         self.actual_width = None
         self.actual_height = None
+        self.stream_url = None  # 保存视频流地址，用于重连
+
+        # 重连状态
+        self.reconnect_attempts = 0  # 连续重连尝试次数
+        self.max_reconnect_attempts = 5  # 最大连续重连次数
+        self.last_reconnect_time = 0  # 上次重连时间
+        self.reconnect_cooldown = 10  # 重连冷却时间（秒），防止频繁重连
+
+        # grab失败计数器（用于检测isOpened()不可靠的情况）
+        self.grab_fail_count = 0  # 连续grab失败次数
+        self.max_grab_fails_before_reconnect = 5  # 连续失败多少次后强制重连
 
         # 性能统计
         self.perf_stats = {
@@ -106,6 +118,8 @@ class CameraProcessor:
             'processed_frames': 0,
             'frame_intervals': [],  # 帧间隔（实际）
             'last_process_time': None,  # 上次处理时间
+            'grab_times': [],  # grab操作时间
+            'retrieve_times': [],  # retrieve操作时间
         }
 
         # 组件
@@ -113,6 +127,11 @@ class CameraProcessor:
         self.api_client = None
         self.rules = {}  # {rule_type: RuleEngine实例}
         self.cap = None
+
+        # grab线程相关
+        self.grab_thread = None
+        self.grab_thread_running = False
+        self.grab_lock = threading.Lock()  # 保护cap的线程锁
 
         logger.info(f"[{self.camera_key}] CameraProcessor初始化完成")
 
@@ -128,20 +147,20 @@ class CameraProcessor:
 
             # 2. 获取视频流地址
             logger.info(f"[{self.camera_key}] 获取视频流地址...")
-            stream_url = self.api_client.get_stream_url(
+            self.stream_url = self.api_client.get_stream_url(
                 self.camera_config['device_code'],
                 self.camera_config['channel_code']
             )
 
-            if not stream_url:
+            if not self.stream_url:
                 logger.error(f"[{self.camera_key}] 无法获取视频流地址")
                 return
 
-            logger.info(f"[{self.camera_key}] 视频流地址: {stream_url}")
+            logger.info(f"[{self.camera_key}] 视频流地址: {self.stream_url}")
 
             # 3. 打开视频流
             logger.info(f"[{self.camera_key}] 打开视频流...")
-            self.cap = cv2.VideoCapture(stream_url)
+            self.cap = cv2.VideoCapture(self.stream_url)
 
             if not self.cap.isOpened():
                 logger.error(f"[{self.camera_key}] 无法打开视频流")
@@ -187,7 +206,6 @@ class CameraProcessor:
                     channels=3,
                     use_simotm=use_simotm
                 )
-                logger.info(f"[{self.camera_key}] ✓ YOLO检测器初始化完成")
 
             # 6. 初始化规则引擎
             logger.info(f"[{self.camera_key}] 初始化规则引擎...")
@@ -207,7 +225,11 @@ class CameraProcessor:
             process_interval = max(1, int(round(float(fps) / float(self.process_fps))))
             logger.info(f"[{self.camera_key}] 抽帧设置: 每 {process_interval} 帧处理一次")
 
-            # 8. 主循环
+            # 8. 启动grab线程（持续grab帧，维持RTSP连接）
+            logger.info(f"[{self.camera_key}] 启动grab线程...")
+            self._start_grab_thread()
+
+            # 9. 主循环
             logger.info(f"[{self.camera_key}] 开始处理循环...")
             self._process_loop(process_interval, fps)
 
@@ -248,6 +270,127 @@ class CameraProcessor:
             except Exception as e:
                 logger.error(f"[{self.camera_key}] 初始化规则失败 [{rule_type}]: {e}", exc_info=True)
 
+    def _grab_thread_func(self):
+        """
+        grab线程函数：持续从视频流grab帧
+        这样主线程可以按需retrieve，不受grab频率限制
+        """
+        logger.info(f"[{self.camera_key}] Grab线程已启动")
+
+        while self.grab_thread_running:
+            try:
+                # 持续grab帧，维持RTSP连接
+                grab_start = time.time()
+                with self.grab_lock:
+                    if self.cap is not None and self.cap.isOpened():
+                        ret = self.cap.grab()
+                        grab_time = (time.time() - grab_start) * 1000
+
+                        # 记录grab时间
+                        self.perf_stats['grab_times'].append(grab_time)
+                        if len(self.perf_stats['grab_times']) > 100:
+                            self.perf_stats['grab_times'].pop(0)
+
+                        if not ret:
+                            self.grab_fail_count += 1
+                            if self.grab_fail_count >= self.max_grab_fails_before_reconnect:
+                                logger.error(f"[{self.camera_key}] Grab线程检测到连续失败{self.grab_fail_count}次")
+                        else:
+                            # grab成功，重置失败计数
+                            if self.grab_fail_count > 0:
+                                self.grab_fail_count = 0
+
+                # 短暂休眠，避免CPU占用过高
+                time.sleep(0.001)
+
+            except Exception as e:
+                logger.error(f"[{self.camera_key}] Grab线程异常: {e}", exc_info=True)
+                time.sleep(0.1)
+
+        logger.info(f"[{self.camera_key}] Grab线程已停止")
+
+    def _start_grab_thread(self):
+        """启动grab线程"""
+        if self.grab_thread is not None and self.grab_thread.is_alive():
+            logger.warning(f"[{self.camera_key}] Grab线程已经在运行")
+            return
+
+        self.grab_thread_running = True
+        self.grab_thread = threading.Thread(target=self._grab_thread_func, daemon=True)
+        self.grab_thread.start()
+        logger.info(f"[{self.camera_key}] 已启动grab线程")
+
+    def _stop_grab_thread(self):
+        """停止grab线程"""
+        if self.grab_thread is None:
+            return
+
+        self.grab_thread_running = False
+        if self.grab_thread.is_alive():
+            self.grab_thread.join(timeout=2.0)
+        logger.info(f"[{self.camera_key}] 已停止grab线程")
+
+    def _reconnect_stream(self) -> bool:
+        """
+        尝试重连视频流
+
+        Returns:
+            bool: 重连是否成功
+        """
+        current_time = time.time()
+
+        # 检查是否在冷却期内
+        if current_time - self.last_reconnect_time < self.reconnect_cooldown:
+            remaining = self.reconnect_cooldown - (current_time - self.last_reconnect_time)
+            logger.debug(f"[{self.camera_key}] 重连冷却中，剩余 {remaining:.1f}秒")
+            return False
+
+        # 检查是否超过最大重连次数
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            logger.error(f"[{self.camera_key}] 已达到最大重连次数 ({self.max_reconnect_attempts})，"
+                        f"等待 {self.reconnect_cooldown}秒后重置")
+            self.reconnect_attempts = 0  # 重置计数器
+            self.last_reconnect_time = current_time
+            return False
+
+        self.reconnect_attempts += 1
+        self.last_reconnect_time = current_time
+
+        logger.warning(f"[{self.camera_key}] 尝试重连视频流 "
+                      f"(第 {self.reconnect_attempts}/{self.max_reconnect_attempts} 次)...")
+
+        try:
+            # 1. 关闭旧连接
+            if self.cap is not None:
+                self.cap.release()
+                logger.debug(f"[{self.camera_key}] 已释放旧连接")
+
+            # 2. 使用原有流地址重新打开视频流
+            self.cap = cv2.VideoCapture(self.stream_url)
+
+            if not self.cap.isOpened():
+                logger.error(f"[{self.camera_key}] 重连失败：无法打开视频流")
+                return False
+
+            # 3. 重新配置缓冲区
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            # 4. 验证能否读取帧
+            ret = self.cap.grab()
+            if not ret:
+                logger.error(f"[{self.camera_key}] 重连失败：无法抓取帧")
+                self.cap.release()
+                return False
+
+            # 重连成功，重置计数器
+            logger.info(f"[{self.camera_key}] ✓ 视频流重连成功！")
+            self.reconnect_attempts = 0
+            return True
+
+        except Exception as e:
+            logger.error(f"[{self.camera_key}] 重连异常: {e}", exc_info=True)
+            return False
+
     def _process_loop(self, process_interval: int, fps: int):
         """主处理循环"""
         last_gc_time = time.time()  # 记录上次垃圾回收时间
@@ -260,26 +403,48 @@ class CameraProcessor:
                 # 1. 非阻塞检查配置更新
                 self._check_config_update()
 
-                # 2. 先grab帧（不解码，节省内存）
-                ret = self.cap.grab()
-                if not ret:
-                    logger.warning(f"[{self.camera_key}] Grab帧失败")
-                    time.sleep(1)
-                    continue
-
-                self.frame_count += 1
                 current_time = time.time()
 
-                # 3. 基于时间戳的抽帧检测（防止延迟累积）
+                # 2. 基于时间戳的按需retrieve（grab线程在后台持续grab）
                 if current_time >= next_process_time:
                     # 更新下次处理时间（基于当前时间，防止累积）
                     next_process_time = current_time + (1.0 / self.current_fps)
 
-                    # 只有需要处理时才retrieve（解码帧）
-                    ret, frame = self.cap.retrieve()
+                    # 检查grab线程是否报告了连续失败
+                    if self.grab_fail_count >= self.max_grab_fails_before_reconnect:
+                        logger.error(f"[{self.camera_key}] Grab线程连续失败{self.grab_fail_count}次，尝试重连...")
+
+                        # 停止grab线程
+                        self._stop_grab_thread()
+
+                        # 尝试重连
+                        if self._reconnect_stream():
+                            logger.info(f"[{self.camera_key}] 重连成功，重启grab线程")
+                            self.grab_fail_count = 0
+                            self._start_grab_thread()
+                            continue
+                        else:
+                            logger.warning(f"[{self.camera_key}] 重连失败，等待下次尝试")
+                            time.sleep(5)
+                            continue
+
+                    # retrieve（解码帧）- grab线程已经grab了最新帧
+                    retrieve_start = time.time()
+                    with self.grab_lock:
+                        ret, frame = self.cap.retrieve()
+                    retrieve_time = (time.time() - retrieve_start) * 1000  # 转为ms
+                    self.perf_stats['retrieve_times'].append(retrieve_time)
+
                     if not ret or frame is None:
                         logger.warning(f"[{self.camera_key}] Retrieve帧失败")
                         continue
+
+                    # Retrieve成功，重置计数器（视频流正常）
+                    if self.reconnect_attempts > 0:
+                        logger.info(f"[{self.camera_key}] 视频流已恢复正常，重置重连计数器")
+                        self.reconnect_attempts = 0
+
+                    self.frame_count += 1
 
                     process_start = time.time()
 
@@ -385,14 +550,29 @@ class CameraProcessor:
                         self.perf_stats['total_times'].pop(0)
                     if len(self.perf_stats['frame_intervals']) > 100:
                         self.perf_stats['frame_intervals'].pop(0)
+                    if len(self.perf_stats['grab_times']) > 100:
+                        self.perf_stats['grab_times'].pop(0)
+                    if len(self.perf_stats['retrieve_times']) > 100:
+                        self.perf_stats['retrieve_times'].pop(0)
 
-                    
+                else:
+                    # 还没到处理时间，计算剩余时间并休眠
+                    time_until_next = next_process_time - current_time
+                    # 休眠剩余时间的一半，最多10ms，避免CPU空转
+                    sleep_time = min(0.01, max(0.001, time_until_next * 0.5))
+                    time.sleep(sleep_time)
+
+
 
                 # 每5秒打印一次状态和性能统计
-                if self.frame_count % (fps * 5) == 0 and self.perf_stats['processed_frames'] > 0:
+                if self.frame_count % (fps*60) == 0 and self.perf_stats['processed_frames'] > 0:
                     avg_inference = sum(self.perf_stats['inference_times']) / len(self.perf_stats['inference_times'])
                     avg_rules = sum(self.perf_stats['rule_times']) / len(self.perf_stats['rule_times'])
                     avg_total = sum(self.perf_stats['total_times']) / len(self.perf_stats['total_times'])
+
+                    # 计算grab和retrieve平均时间
+                    avg_grab = sum(self.perf_stats['grab_times']) / len(self.perf_stats['grab_times']) if self.perf_stats['grab_times'] else 0
+                    avg_retrieve = sum(self.perf_stats['retrieve_times']) / len(self.perf_stats['retrieve_times']) if self.perf_stats['retrieve_times'] else 0
 
                     # 计算帧间隔统计
                     interval_info = ""
@@ -413,6 +593,8 @@ class CameraProcessor:
 
                     logger.info(f"[{self.camera_key}] 帧: {self.frame_count} | "
                                f"当前fps: {self.current_fps:.1f} | "
+                               f"grab: {avg_grab:.2f}ms | "
+                               f"retrieve: {avg_retrieve:.2f}ms | "
                                f"推理: {avg_inference:.1f}ms | "
                                f"规则: {avg_rules:.1f}ms | "
                                f"总计: {avg_total:.1f}ms{interval_info} | "
@@ -542,6 +724,10 @@ class CameraProcessor:
     def stop(self):
         """停止处理"""
         self.running = False
+
+        # 停止grab线程
+        self._stop_grab_thread()
+
         if self.cap:
             self.cap.release()
         # cv2.destroyAllWindows()  # 关闭所有显示窗口
