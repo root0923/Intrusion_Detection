@@ -76,9 +76,9 @@ def main():
     parser = argparse.ArgumentParser(description="从MP4视频中每秒抽取一帧并保存为图片")
     parser.add_argument("--video", "-v", type=str, required=True, 
                         help="输入的MP4视频文件路径")
-    parser.add_argument("--output", "-o", type=str, default="./extracted_frames", 
+    parser.add_argument("--output", "-o", type=str, default="./extracted_frames1", 
                         help="输出图片保存目录 (默认: ./extracted_frames)")
-    parser.add_argument("--fps", "-f", type=int, default=10, 
+    parser.add_argument("--fps", "-f", type=int, default=0.25, 
                         help="每秒提取的帧数 (默认: 1，即每秒1帧)")
     
     args = parser.parse_args()

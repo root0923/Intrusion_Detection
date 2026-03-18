@@ -92,11 +92,11 @@ def main():
 
     # 1. 配置参数
     roi_config_path = "area_intrusion/roi_config.json"
-    video_source = "data/ls2.mp4"  # 0=摄像头, 或者视频文件路径
+    video_source = r"E:\Jezetek\alarm_info\192.168.1.202_ch15_20260318175848_20260318175913.mp4"  #像 0=摄头, 或者视频文件路径
 
     model_yaml = "ultralytics/cfg/models/11/yolo11m.yaml"
     # 使用 TensorRT Engine 模型
-    model_weights = "data/visible.engine"
+    model_weights = r"runs\20260317V\20260317V\weights\last.engine"
     device = "cuda:0"  # 或 "cpu"
     tracker = "bytetrack"
     target_size = 800
@@ -156,17 +156,17 @@ def main():
     print(f"  - First alarm time: {rule.first_alarm_time}s")
     print(f"  - Tolerance time: {rule.tolerance_time}s")
     print(f"  - Repeated alarm time: {rule.repeated_alarm_time}s")
-    print(f"  - Static filter: {rule.enable_static_filter} (threshold: {rule.static_threshold}px)")
-    print(f"  - Parallel filter: {rule.enable_parallel_filter} (threshold: {rule.parallel_slope_threshold})")
-    print(f"  - Person history window: {rule.person_history_window}s")
-    print(f"  - Splash history window: {rule.splash_history_window}s")
+    print(f"  - Camera type: {'热成像' if rule.is_thermal else '可见光'}")
+    if rule.is_thermal:
+        print(f"  - Static filter: {rule.enable_static_filter} (threshold: {rule.static_threshold}px)")
+        print(f"  - Parallel filter: {rule.enable_parallel_filter} (threshold: {rule.parallel_slope_threshold})")
 
     # 7. 主循环
     print(f"\n[6/6] 开始处理循环...")
     print("按 'q' 退出, 按 's' 截图, 按 'r' 重置规则状态\n")
 
     frame_count = 0
-    process_interval = 4
+    process_interval = 9
     times = []
 
     try:
@@ -202,46 +202,20 @@ def main():
                 vis_frame = draw_rois(vis_frame, converted_rois, color=(0, 255, 0), thickness=2)
 
                 # 绘制检测框
-                # splash使用0.25的置信度阈值，颜色为青色
                 vis_frame = draw_detections(
                     vis_frame,
                     detections,
                     conf_threshold=rule.sensitivity,
-                    class_names={0: 'person', 1: 'duck', 2: 'splash'},
-                    class_conf_thresholds={2: 0.25},  # splash使用0.25阈值
-                    class_colors={2: (255, 255, 0)}  # splash使用青色 (B, G, R)
+                    class_names={0: 'person', 1: 'duck'}
                 )
 
-                # # 显示入侵状态
-                # if rule.detection_history:
-                #     duration = current_time - rule.detection_history[0][0]
-                #     state_text = f"WATER SAFETY DETECT! Duration: {duration:.1f}s"
-                #     cv2.putText(vis_frame, state_text, (10, 60),
-                #               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-                # 显示person历史状态
-                if rule.person_history:
-                    has_person = any(has_person for _, has_person in rule.person_history)
-                    if has_person:
-                        person_text = f"Person in ROI (last 5s): YES"
-                        person_color = (0, 0, 255)  # 红色
-                    else:
-                        person_text = f"Person in ROI (last 5s): NO"
-                        person_color = (0, 255, 0)  # 绿色
-                    cv2.putText(vis_frame, person_text, (10, 60),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, person_color, 2)
-
-                # 显示splash历史状态
-                if rule.splash_history:
-                    has_splash = any(has_splash for _, has_splash in rule.splash_history)
-                    if has_splash:
-                        splash_text = f"Splash in ROI (last 5s): YES"
-                        splash_color = (0, 0, 255)  # 红色
-                    else:
-                        splash_text = f"Splash in ROI (last 5s): NO"
-                        splash_color = (0, 255, 0)  # 绿色
-                    cv2.putText(vis_frame, splash_text, (10, 90),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, splash_color, 2)
+                # 显示检测状态
+                if rule.detection_history:
+                    duration = current_time - rule.detection_history[0][0]
+                    frame_count_text = len(rule.detection_history)
+                    state_text = f"Detecting: {frame_count_text}/3 frames, {duration:.1f}s"
+                    cv2.putText(vis_frame, state_text, (10, 60),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
                 # 如果有报警，显示报警信息
                 if alarm_info:

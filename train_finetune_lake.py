@@ -4,10 +4,11 @@ from ultralytics import YOLO
 
 if __name__ == '__main__':
     # 加载预训练模型进行微调
-    model = YOLO('ultralytics/cfg/models/11/yolo11m.yaml')
+    model = YOLO(r'runs\20260317V\20260317V\weights\last.pt')
 
     # 微调训练配置
     model.train(
+        resume=True,
         data='ultralytics/cfg/datasets/lakeV.yaml',  # 数据集配置
         channels=3,           # 使用3通道RGB
         use_simotm='RGB', # SimOTMBBS
@@ -26,7 +27,7 @@ if __name__ == '__main__':
         close_mosaic=10,  # 最后10轮关闭mosaic增强
 
         # 硬件设置
-        workers=4,
+        workers=0,
         device='0',  # 单GPU，多GPU用'0,1'
 
         # 优化器设置（微调关键参数）
@@ -46,8 +47,8 @@ if __name__ == '__main__':
         save_period=10,  # 每10轮保存一次
 
         # 输出目录
-        project='runs/finetune_V_3classes',
-        name='lake-yolo11m-finetune_V_3classes',
+        project='runs/20260317V',
+        name='20260317V',
         exist_ok=False,  # 如果目录存在是否覆盖
 
         # 其他可选参数
